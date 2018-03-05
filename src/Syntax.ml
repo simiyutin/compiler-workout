@@ -87,7 +87,13 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval (s, i, o) stmt = match stmt with
+    | Read(x)       -> (match i with
+                       | hd::tl -> (Expr.update x hd s, tl, o)
+                       | _      -> failwith "trying to read from empty stream")
+    | Write(e)      -> (s, i, o @ [Expr.eval s e])
+    | Assign(x, e)  -> (Expr.update x (Expr.eval s e) s, i, o)
+    | Seq(st1, st2) -> eval (eval (s, i, o) st1) st2
                                                          
   end
 
