@@ -59,9 +59,9 @@ let rec eval conf prg = match prg with
 
      val run : prg -> int list -> int list
 
-   Takes an input stream, a program, and returns an output stream this program calculates
+   Takes a program, an input stream, and returns an output stream this program calculates
 *)
-let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
+let run p i = let (_, (_, _, o)) = eval ([], (Language.Expr.empty, i, [])) p in o
 
 (* Stack machine compiler
 
@@ -70,6 +70,7 @@ let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
    Takes a program in the source language and returns an equivalent program for the
    stack machine
  *)
+
 let rec compileExpr pg e = match e with
          Language.Expr.Const(z)           -> pg@[CONST z]
        | Language.Expr.Var(x)             -> pg@[LD x]
@@ -86,5 +87,3 @@ let rec compileStmt pg stmt = match stmt with
     | Language.Stmt.Seq(st1, st2) -> pg@compileStmt [] st1@compileStmt [] st2
 
 let compile stmt = compileStmt [] stmt
-
-                         
