@@ -4,7 +4,8 @@
 open GT
 
 (* Opening a library for combinator-based syntax analysis *)
-open Ostap.Combinators
+open Ostap
+
        
 (* Simple expressions: syntax and semantics *)
 module Expr =
@@ -74,8 +75,24 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
    
     *)
+    let bop op x y = Binop (op, x, y)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      const: x:DECIMAL {Const(x)};
+      var: x:IDENT {Var(x)};
+      expr:
+  	!(Util.expr
+           (fun x -> x)
+           [|
+             `Lefta , [ostap ("!!"), bop "!!"];
+             `Lefta , [ostap ("&&"), bop "&&"];
+             `Nona , [ostap ("<="), bop "<="; ostap (">="), bop ">="; ostap ("=="), bop "=="; ostap ("!="), bop "!="; ostap ("<"), bop "<"; ostap (">"), bop ">"];
+             `Lefta , [ostap ("+"), bop "+"; ostap ("-"), bop "-"];
+             `Lefta, [ostap ("*"), bop "*"; ostap ("/"), bop "/"; ostap ("%"), bop "%"];
+           |]
+           primary
+         );
+      primary: const | var | -"(" expr -")";
+      parse: expr | const | var
     )
 
   end
@@ -110,7 +127,12 @@ module Stmt =
 
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      read: -"read" -"(" x:IDENT -")" {Read (x)};
+      write: -"write" -"(" e:!(Expr.parse) -")" {Write (e)};
+      assign: x:IDENT -":=" e:!(Expr.parse) {Assign (x, e)};
+      simpleStmt: read | write | assign;
+      seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
+      parse: seq
     )
       
   end
