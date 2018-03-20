@@ -4,7 +4,8 @@
 open GT
 
 (* Opening a library for combinator-based syntax analysis *)
-open Ostap.Combinators
+open Ostap
+
        
 (* Simple expressions: syntax and semantics *)
 module Expr =
@@ -43,43 +44,57 @@ module Expr =
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
-     *)                                                       
-    let to_func op =
-      let bti   = function true -> 1 | _ -> 0 in
-      let itb b = b <> 0 in
-      let (|>) f g   = fun x y -> f (g x y) in
-      match op with
-      | "+"  -> (+)
-      | "-"  -> (-)
-      | "*"  -> ( * )
-      | "/"  -> (/)
-      | "%"  -> (mod)
-      | "<"  -> bti |> (< )
-      | "<=" -> bti |> (<=)
-      | ">"  -> bti |> (> )
-      | ">=" -> bti |> (>=)
-      | "==" -> bti |> (= )
-      | "!=" -> bti |> (<>)
-      | "&&" -> fun x y -> bti (itb x && itb y)
-      | "!!" -> fun x y -> bti (itb x || itb y)
-      | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)    
-    
-    let rec eval st expr =      
-      match expr with
-      | Const n -> n
-      | Var   x -> st x
-      | Binop (op, x, y) -> to_func op (eval st x) (eval st y)
+    *)
+    let b2i x = if x then 1 else 0
+    let i2b x = if x = 0 then false else true
+
+    let parseBinOp op z1 z2 = match op with
+        "+" -> z1 + z2
+      | "-" -> z1 - z2
+      | "*" -> z1 * z2
+      | "/" -> z1 / z2
+      | "%" -> z1 mod z2
+      | ">" -> b2i (z1 > z2)
+      | "<" -> b2i (z1 < z2)
+      | ">=" -> b2i (z1 >= z2)
+      | "<=" -> b2i (z1 <= z2)
+      | "==" -> b2i (z1 = z2)
+      | "!=" -> b2i (z1 <> z2)
+      | "!!" -> b2i ((i2b z1) || (i2b z2))
+      | "&&" -> b2i ((i2b z1) && (i2b z2))
+      | _ -> failwith ("unknown__operand:" ^ op)
+
+    let rec eval s e = match e with
+        Const(z) -> z
+       | Var(x) -> s x
+       | Binop(str, e1, e2) -> parseBinOp str (eval s e1) (eval s e2)
 
     (* Expression parser. You can use the following terminals:
 
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string
-                                                                                                                  
+   
     *)
-    ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+    let bop op x y = Binop (op, x, y)
+    ostap (
+      const: x:DECIMAL {Const(x)};
+      var: x:IDENT {Var(x)};
+      expr:
+  	!(Util.expr
+           (fun x -> x)
+           [|
+             `Lefta , [ostap ("!!"), bop "!!"];
+             `Lefta , [ostap ("&&"), bop "&&"];
+             `Nona , [ostap ("<="), bop "<="; ostap (">="), bop ">="; ostap ("=="), bop "=="; ostap ("!="), bop "!="; ostap ("<"), bop "<"; ostap (">"), bop ">"];
+             `Lefta , [ostap ("+"), bop "+"; ostap ("-"), bop "-"];
+             `Lefta, [ostap ("*"), bop "*"; ostap ("/"), bop "/"; ostap ("%"), bop "%"];
+           |]
+           primary
+         );
+      primary: const | var | -"(" expr -")";
+      parse: expr | const | var
     )
-    
+
   end
                     
 (* Simple statements: syntax and sematics *)
@@ -98,20 +113,26 @@ module Stmt =
 
     (* Statement evaluator
 
-         val eval : config -> t -> config
+          val eval : config -> t -> config
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let rec eval ((st, i, o) as conf) stmt =
-      match stmt with
-      | Read    x       -> (match i with z::i' -> (Expr.update x z st, i', o) | _ -> failwith "Unexpected end of input")
-      | Write   e       -> (st, i, o @ [Expr.eval st e])
-      | Assign (x, e)   -> (Expr.update x (Expr.eval st e) st, i, o)
-      | Seq    (s1, s2) -> eval (eval conf s1) s2
-                                
+    let rec eval (s, i, o) stmt = match stmt with
+    | Read(x)       -> (match i with
+                       | hd::tl -> (Expr.update x hd s, tl, o)
+                       | _      -> failwith "trying to read from empty stream")
+    | Write(e)      -> (s, i, o @ [Expr.eval s e])
+    | Assign(x, e)  -> (Expr.update x (Expr.eval s e) s, i, o)
+    | Seq(st1, st2) -> eval (eval (s, i, o) st1) st2
+
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not yet implemented"}
+      read: -"read" -"(" x:IDENT -")" {Read (x)};
+      write: -"write" -"(" e:!(Expr.parse) -")" {Write (e)};
+      assign: x:IDENT -":=" e:!(Expr.parse) {Assign (x, e)};
+      simpleStmt: read | write | assign;
+      seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
+      parse: seq
     )
       
   end
