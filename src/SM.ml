@@ -130,6 +130,9 @@ let rec compileStmt pg stmt = match stmt with
       let beginlabel = freshName "begin" in
       let endlabel   = freshName "end" in
       pg@[LABEL(beginlabel)]@compileExpr [] e@[CONST(0); CJMP("e", endlabel)]@compileStmt [] st@[JMP(beginlabel); LABEL(endlabel)]
+    | Language.Stmt.Repeat(st, e) ->
+      let beginLabel = freshName "begin" in
+      pg@[LABEL(beginLabel)]@compileStmt [] st@compileExpr [] e@[CONST(0); CJMP("e", beginLabel)]
 
 let compile stmt = compileStmt [] stmt
 

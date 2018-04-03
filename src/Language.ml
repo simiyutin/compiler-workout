@@ -111,7 +111,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) (* add yourself *)  with show
+    (* loop with a post-condition       *) | Repeat of t * Expr.t  with show
 
     (* The type of configuration: a state, an input stream, an output stream *)
     type config = Expr.state * int list * int list 
@@ -132,6 +132,9 @@ module Stmt =
     | Skip           -> conf
     | If(e, br1, br2)-> if i2b @@ Expr.eval s e then eval conf br1 else eval conf br2
     | While(e, xs)   -> if i2b @@ Expr.eval s e then eval conf @@ Seq(xs, stmt) else conf
+    | Repeat(xs, e)  ->
+      let ((s', _, _) as c') = eval conf xs in
+      if i2b @@ Expr.eval s' e then c' else eval c' @@ Repeat(xs, e)
 
     (* Statement parser *)
     ostap (
@@ -143,7 +146,8 @@ module Stmt =
       els: -"else" branch:seq {branch} | -"elif" e:!(Expr.parse) -"then" branch1:seq branch2:els {If(e, branch1, branch2)} | -"" {Skip};
       whl: -"while" e:!(Expr.parse) -"do" xs:seq -"od" {While (e, xs)};
       sugarfor: -"for" st:simpleStmt -"," e:!(Expr.parse) -"," st2:simpleStmt -"do" body:seq -"od" {Seq(st, While(e, Seq(body, st2)))};
-      simpleStmt: read | write | assign | skip | ite | whl | sugarfor;
+      repeat: -"repeat" xs:seq -"until" e:!(Expr.parse) {Repeat(xs, e)};
+      simpleStmt: read | write | assign | skip | ite | whl | sugarfor | repeat;
       seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
       parse: seq
     )
