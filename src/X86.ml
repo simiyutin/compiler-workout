@@ -86,7 +86,77 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code = failwith "Not yet implemented"
+
+(* def: symbolic stack === [regs..][real stack..] *)
+(* destination: второй операнд *)
+(* семантика прибавь/вычти первый операнд ко/из второго операнда *)
+let ensureFstReg codeProducer env =
+  let fst, snd, env = env#pop2 in
+  let _, env        = env#allocate in
+  match fst with
+| S _ -> (env, Mov(fst, eax) :: codeProducer eax snd)
+| R _ -> (env, codeProducer fst snd)
+| _ -> failwith "unexpected addressing mode"
+
+let handleSimpleInstr instr env =
+  let codeProducer = fun fst snd -> [Binop(instr, snd, fst); Mov(fst, snd)] in
+  ensureFstReg codeProducer env
+
+let handleDivInstr instr env outputReg =
+  let fst, snd, env = env#pop2 in
+  let _, env        = env#allocate in
+  (env, [Mov(fst, eax); Cltd; IDiv(snd); Mov(outputReg, snd)])
+
+let handleComparisonInstr instr env =
+  let codeProducer = fun fst snd -> [Binop("cmp", snd, fst); Mov(L 0, eax); Set(instr, "%AL"); Mov(eax, snd)] in
+  ensureFstReg codeProducer env
+
+let i2b2 env =
+  let fst, snd, _ = env#pop2 in
+  let zero, env   = env#allocate in
+  let env, cmpCode = handleComparisonInstr "NE" env in
+  let swap = [Mov(fst, eax); Mov(snd, edx); Mov(eax, snd); Mov(edx, fst)] in
+  (env, [Mov(L 0, zero)] @ cmpCode @ swap @ cmpCode @ swap)
+
+let handleBooleanInstr instr env =
+  let env, convertCode = i2b2 env in
+  let env, code    = handleSimpleInstr instr env in
+  (env, convertCode @ code)
+
+let compileBinopInstr instr env = match instr with
+| "+" -> handleSimpleInstr "+" env
+| "-" -> handleSimpleInstr "-" env
+| "*" -> handleSimpleInstr "*" env
+| "/" -> handleDivInstr "/" env eax
+| "%" -> handleDivInstr "%" env edx
+| ">" -> handleComparisonInstr "G" env
+| "<" -> handleComparisonInstr "L" env
+| ">="-> handleComparisonInstr "GE" env
+| "<="-> handleComparisonInstr "LE" env
+| "=="-> handleComparisonInstr "E" env
+| "!="-> handleComparisonInstr "NE" env
+| "!!"-> handleBooleanInstr "!!" env
+| "&&"-> handleBooleanInstr "&&" env
+| _ -> failwith ("unknown__operand:" ^ instr)
+
+let compileInstr instr env = match instr with
+| CONST n   -> let s, env = env#allocate in (env, [Mov(L n, s)])
+| WRITE     -> let s, env = env#pop in (env, [Push s; Call "Lwrite"; Pop eax])
+| READ      -> let s, env = env#allocate in (env, [Call "Lread"; Mov(eax, s)])
+| LD(x)     -> let s, env = (env#global x)#allocate in (env, [Mov(M (env#loc x), eax); Mov(eax, s)])
+| ST(x)     -> let s, env = (env#global x)#pop in (env, [Mov(s, eax); Mov(eax, M (env#loc x))])
+| BINOP(x)  -> compileBinopInstr x env
+| LABEL(x)  -> (env, [Label(x)])
+| JMP(x)    -> (env, [Jmp(x)])
+| CJMP(s, x)-> let fst, snd, _ = env#pop2 in(env, [Mov(fst, eax); Binop("cmp", snd, eax); CJmp(s, x)])
+
+let rec compile env code = match code with
+| [] -> (env, [])
+| instr :: instrxs ->
+  let env, asm = compileInstr instr env in
+  let env, asmxs = compile env instrxs in
+  (env, asm @ asmxs)
+
 
 (* A set of strings *)           
 module S = Set.Make (String)
