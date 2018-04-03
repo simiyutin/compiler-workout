@@ -139,9 +139,11 @@ module Stmt =
       write: -"write" -"(" e:!(Expr.parse) -")" {Write (e)};
       assign: x:IDENT -":=" e:!(Expr.parse) {Assign (x, e)};
       skip: -"skip" {Skip};
-      ite: -"if" e:!(Expr.parse) -"then" branch1:seq -"else" branch2:seq -"fi" {If (e, branch1, branch2)};
+      ite: -"if" e:!(Expr.parse) -"then" branch1:seq branch2:els -"fi" {If (e, branch1, branch2)};
+      els: -"else" branch:seq {branch} | -"elif" e:!(Expr.parse) -"then" branch1:seq branch2:els {If(e, branch1, branch2)} | -"" {Skip};
       whl: -"while" e:!(Expr.parse) -"do" xs:seq -"od" {While (e, xs)};
-      simpleStmt: read | write | assign | skip | ite | whl;
+      sugarfor: -"for" st:simpleStmt -"," e:!(Expr.parse) -"," st2:simpleStmt -"do" body:seq -"od" {Seq(st, While(e, Seq(body, st2)))};
+      simpleStmt: read | write | assign | skip | ite | whl | sugarfor;
       seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
       parse: seq
     )
