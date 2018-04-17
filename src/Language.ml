@@ -16,22 +16,27 @@ module State =
     (* State: global state, local state, scope variables *)
     type t = {g : string -> int; l : string -> int; scope : string list}
 
+    let empty_part x = failwith (Printf.sprintf "Undefined variable %s" x)
+
+    let update_part x v s = fun y -> if x = y then v else s y
+
     (* Empty state *)
-    let empty = failwith "Not implemented"
+    let empty = (empty_part, empty_part, [])
 
     (* Update: non-destructively "modifies" the state s by binding the variable x
        to value v and returns the new state w.r.t. a scope
     *)
-    let update x v s = failwith "Not implemented"
+    let update x v (g, l, sc) = if List.mem x sc then (g, update_part x v l, sc) else (update_part x v g, l, sc)
 
     (* Evals a variable in a state w.r.t. a scope *)
-    let eval s x = failwith "Not implemented"
+    let eval (g, l, sc) x = if List.mem x sc then l x else g x
 
+    (* вот тут появляются переменные в скоупе. если написать внутри функции присваивание не local переменной, то она станет глобальной*)
     (* Creates a new scope, based on a given state *)
-    let enter st xs = failwith "Not implemented"
+    let enter (g, _, _) xs = (g, empty_part, xs)
 
-    (* Drops a scope *)
-    let leave st st' = failwith "Not implemented"
+    (* Drops a scope. semantic: leave FROM scope TO scope *)
+    let leave (g, _, _) (_, l', sc') = (g, l', sc')
 
   end
 
