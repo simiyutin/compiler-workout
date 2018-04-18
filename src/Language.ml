@@ -186,7 +186,8 @@ module Stmt =
       whl: -"while" e:!(Expr.parse) -"do" xs:seq -"od" {While (e, xs)};
       sugarfor: -"for" st:simpleStmt -"," e:!(Expr.parse) -"," st2:simpleStmt -"do" body:seq -"od" {Seq(st, While(e, Seq(body, st2)))};
       repeat: -"repeat" xs:seq -"until" e:!(Expr.parse) {Repeat(xs, e)};
-      simpleStmt: read | write | assign | skip | ite | whl | sugarfor | repeat;
+      call: fname:IDENT -"(" args:!(Expr.parse)* -")" {Call(fname, args)};
+      simpleStmt: read | write | assign | skip | ite | whl | sugarfor | repeat | call;
       seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
       parse: seq
     )
@@ -201,7 +202,9 @@ module Definition =
     type t = string * (string list * string list * Stmt.t)
 
     ostap (
-      parse: empty {failwith "Not implemented"}
+      loctl: -"," x:IDENT xs:loctl {x::xs} | -"" {[]};
+      loc: -"local" x:IDENT xs:loctl {x::xs} | -"" {[]};
+      parse: -"fun" fname:IDENT -"(" args:IDENT* -")" locals:loc -"{" body:!(Stmt.parse) -"}" {(fname, (args, locals, body))}
     )
       
   end
@@ -226,4 +229,6 @@ let eval (defs, body) i =
   let _, _, o = Stmt.eval (object method getdef name = M.find name m end) (State.empty, i, []) body in o
 
 (* Top-level parser *)
-let parse = failwith "Not implemented"
+ostap (
+  parse: defs:!(Definition.parse)* body:!(Stmt.parse) {(defs, body)}
+)
