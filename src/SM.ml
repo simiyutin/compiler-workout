@@ -48,7 +48,7 @@ let handleWrite (stack, (s, i, o)) = match stack with
 let handleLoad x (stack, (s, i, o)) = (s x::stack, (s, i, o))
 
 let handleStore x (stack, (s, i, o)) = match stack with
-  | h::hs -> (hs, (Language.Expr.update x h s, i, o))
+  | h::hs -> (hs, (Language.State.update x h s, i, o))
   | _     -> failwith "stack is too small"
 
 let pop2 (stack, conf) = match stack with
@@ -63,7 +63,9 @@ let condition suff (stack, conf) = match stack with
   )
   | _          -> failwith "condition: stack is too small"
 
-(* let eval env ((cstack, stack, ((st, i, o) as c)) as conf) = failwith "Not implemented" *)
+let eval env ((cstack, stack, ((st, i, o) as c)) as conf) = failwith "Not implemented"
+
+(*
 let rec eval env conf prg = match prg with
   | [] -> conf
   | hd::tl -> ( match hd with
@@ -77,6 +79,8 @@ let rec eval env conf prg = match prg with
         | JMP(x)    -> eval env conf @@ env#labeled x
         | CJMP(s, x)-> if condition s conf then eval env (pop2 conf) @@ env#labeled x else eval env (pop2 conf) tl
   )
+
+*)
 
 (* Top-level evaluation
 
@@ -139,6 +143,7 @@ let rec compileStmt pg stmt = match stmt with
       pg@[LABEL(beginLabel)]@compileStmt [] st@compileExpr [] e@[CONST(0); CJMP("e", beginLabel)]
 
 (* todo: stmt -> top level program*)
-let compile (defs, p) = compileStmt [] p
+(*let compile (defs, p) = compileStmt [] p *)
+let compile (defs, p) = failwith "not yet implemented"
 
 

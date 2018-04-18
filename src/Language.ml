@@ -5,9 +5,14 @@ open GT
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap
+open Combinators
 
 let b2i x = if x then 1 else 0
 let i2b x = if x = 0 then false else true
+let rec zip lst1 lst2 = match lst1,lst2 with
+  | [],_ -> []
+  | _, []-> []
+  | (x::xs),(y::ys) -> (x,y) :: (zip xs ys)
 
 (* States *)
 module State =
@@ -87,7 +92,7 @@ module Expr =
 
     let rec eval s e = match e with
         Const(z) -> z
-       | Var(x) -> s x
+       | Var(x) -> State.eval s x
        | Binop(str, e1, e2) -> parseBinOp str (eval s e1) (eval s e2)
 
     (* Expression parser. You can use the following terminals:
@@ -148,12 +153,13 @@ module Stmt =
 
        which returns a list of formal parameters, local variables, and a body for given definition
     *)
+
     let rec eval env ((s, i, o) as conf) stmt = match stmt with
     | Read(x)       -> (match i with
-                       | hd::tl -> (Expr.update x hd s, tl, o)
+                       | hd::tl -> (State.update x hd s, tl, o)
                        | _      -> failwith "trying to read from empty stream")
     | Write(e)       -> (s, i, o @ [Expr.eval s e])
-    | Assign(x, e)   -> (Expr.update x (Expr.eval s e) s, i, o)
+    | Assign(x, e)   -> (State.update x (Expr.eval s e) s, i, o)
     | Seq(st1, st2)  -> eval env (eval env conf st1) st2
     | Skip           -> conf
     | If(e, br1, br2)-> if i2b @@ Expr.eval s e then eval env conf br1 else eval env conf br2
@@ -161,6 +167,13 @@ module Stmt =
     | Repeat(xs, e)  ->
       let ((s', _, _) as c') = eval env conf xs in
       if i2b @@ Expr.eval s' e then c' else eval env c' @@ Repeat(xs, e)
+    | Call(fname, args) ->
+      let (argnames, locnames, body) = env#getdef fname in
+      let upd st (x, e) = State.update x (Expr.eval s e) st in
+      let entst = State.enter s (argnames @ locnames) in
+      let entst = List.fold_left upd entst (zip argnames args) in
+      let (outst, i, o) = eval env (entst, i, o) body in
+      (State.leave outst s), i, o
 
     (* Statement parser *)
     ostap (
@@ -204,11 +217,13 @@ type t = Definition.t list * Stmt.t
 
    Takes a program and its input stream, and returns the output stream
 *)
-let eval (defs, body) i = failwith "Not implemented"
-(*
-let eval p i =
-  let _, _, o = Stmt.eval (Expr.empty, i, []) p in o
-*)
+let eval (defs, body) i =
+  let module M = Map.Make (String) in
+  let rec make_map m = function
+  | []              -> m
+  | (name, signature) :: tl -> make_map (M.add name signature m) tl in
+  let m = make_map M.empty defs in
+  let _, _, o = Stmt.eval (object method getdef name = M.find name m end) (State.empty, i, []) body in o
 
 (* Top-level parser *)
 let parse = failwith "Not implemented"
