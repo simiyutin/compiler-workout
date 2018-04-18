@@ -36,7 +36,6 @@ module State =
     (* Evals a variable in a state w.r.t. a scope *)
     let eval (g, l, sc) x = if List.mem x sc then l x else g x
 
-    (* вот тут появляются переменные в скоупе. если написать внутри функции присваивание не local переменной, то она станет глобальной*)
     (* Creates a new scope, based on a given state *)
     let enter (g, _, _) xs = (g, empty_part, xs)
 

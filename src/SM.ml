@@ -31,31 +31,31 @@ type config = (prg * State.t) list * int list * Stmt.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
  *)
-let handleBinOp op (stack, conf) = match stack with
-  | h::hs::hss -> ((Language.Expr.parseBinOp op h hs)::hss, conf)
+let handleBinOp op (cstack, stack, conf) = match stack with
+  | h::hs::hss -> (cstack, (Language.Expr.parseBinOp op h hs)::hss, conf)
   | _          -> failwith "stack is too small"
 
-let handleConst i (stack, conf) = (i::stack, conf)
+let handleConst i (cstack, stack, conf) = (cstack, i::stack, conf)
 
-let handleRead (stack, conf) = match conf with
-  | (s, h::hs, o) -> (h::stack, (s, hs, o))
+let handleRead (cstack, stack, conf) = match conf with
+  | (s, h::hs, o) -> (cstack, h::stack, (s, hs, o))
   | _             -> failwith "cannot read from empty input stream"
 
-let handleWrite (stack, (s, i, o)) = match stack with
-  | h::hs -> (hs, (s, i, o@[h]))
+let handleWrite (cstack, stack, (s, i, o)) = match stack with
+  | h::hs -> (cstack, hs, (s, i, o@[h]))
   | _     -> failwith "stack is too small"
 
-let handleLoad x (stack, (s, i, o)) = (s x::stack, (s, i, o))
+let handleLoad x (cstack, stack, (s, i, o)) = (cstack, (State.eval s x)::stack, (s, i, o))
 
-let handleStore x (stack, (s, i, o)) = match stack with
-  | h::hs -> (hs, (Language.State.update x h s, i, o))
+let handleStore x (cstack, stack, (s, i, o)) = match stack with
+  | h::hs -> (cstack, hs, (State.update x h s, i, o))
   | _     -> failwith "stack is too small"
 
-let pop2 (stack, conf) = match stack with
-  | _::_::tl -> (tl, conf)
+let pop2 (cstack, stack, conf) = match stack with
+  | _::_::tl -> (cstack, tl, conf)
   | _        -> failwith("pop2: stack is too small")
 
-let condition suff (stack, conf) = match stack with
+let condition suff (cstack, stack, conf) = match stack with
   | h::hs::hss -> (match suff with
 
     | "e" -> h = hs
@@ -63,10 +63,15 @@ let condition suff (stack, conf) = match stack with
   )
   | _          -> failwith "condition: stack is too small"
 
-let eval env ((cstack, stack, ((st, i, o) as c)) as conf) = failwith "Not implemented"
+let handleBegin argnames locnames (cstack, stack, (st, i, o)) =
+  let upd st (x, z) = State.update x z st in
+  let entst = State.enter st (argnames @ locnames) in
+  let entst = List.fold_left upd entst (zip (List.rev argnames) stack) in
+  let rec chopn n lst = if n == 0 then lst else chopn (n - 1) @@ List.tl lst in
+  (cstack, chopn (List.length argnames) stack, (entst, i, o))
 
-(*
-let rec eval env conf prg = match prg with
+
+let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg with
   | [] -> conf
   | hd::tl -> ( match hd with
         | BINOP(op) -> eval env (handleBinOp op conf) tl
@@ -78,9 +83,13 @@ let rec eval env conf prg = match prg with
         | LABEL(x)  -> eval env conf tl
         | JMP(x)    -> eval env conf @@ env#labeled x
         | CJMP(s, x)-> if condition s conf then eval env (pop2 conf) @@ env#labeled x else eval env (pop2 conf) tl
+        | CALL(l)   -> eval env ((tl, st)::cstack, stack, c) @@ env#labeled l
+        | END       -> (match cstack with
+                       | (p, st')::tl -> eval env (tl, stack, (State.leave st st', i, o)) p
+                       | []           -> conf
+                       )
+        | BEGIN(argnames, locnames) -> eval env (handleBegin argnames locnames conf) tl
   )
-
-*)
 
 (* Top-level evaluation
 
@@ -141,9 +150,10 @@ let rec compileStmt pg stmt = match stmt with
     | Language.Stmt.Repeat(st, e) ->
       let beginLabel = freshName "begin" in
       pg@[LABEL(beginLabel)]@compileStmt [] st@compileExpr [] e@[CONST(0); CJMP("e", beginLabel)]
+    | Language.Stmt.Call(fname, args) -> (List.concat @@ List.map (compileExpr []) args) @ [CALL(fname)]
 
-(* todo: stmt -> top level program*)
-(*let compile (defs, p) = compileStmt [] p *)
-let compile (defs, p) = failwith "not yet implemented"
+let compileDef (name, (argnames, locnames, body)) = [LABEL(name); BEGIN(argnames, locnames)] @ (compileStmt [] body) @ [END]
+
+let compile (defs, p) = (compileStmt [] p) @ [END] @ (List.concat @@ List.map compileDef defs)
 
 
