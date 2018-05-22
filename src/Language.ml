@@ -152,6 +152,7 @@ module Expr =
     ostap (
       const: x:DECIMAL {Const(x)};
       var: x:IDENT {Var(x)};
+      call: fname:IDENT -"(" args:!(Util.list0)[parse] -")" {Call(fname, args)};
       expr:
   	!(Util.expr
            (fun x -> x)
@@ -164,13 +165,12 @@ module Expr =
            |]
            primary
          );
-      primary: const | var | -"(" expr -")";
-      (*call: fname:IDENT -"(" args:!(parse)* -")" {Call(fname, args)};*)
-      parse: expr | const | var
+      primary: call | const | var | -"(" expr -")";
+      parse: expr | call | const | var
     )
 
   end
-                    
+
 (* Simple statements: syntax and sematics *)
 module Stmt =
   struct
@@ -220,10 +220,8 @@ module Stmt =
      let br = if i2b r then Seq(xs, stmt) else Skip in
      eval env (s, i, o, None) k br
     | Repeat (xs, e)     -> eval env conf k (Seq(xs, While(Expr.not e, xs)))
-    | Call (fname, args) ->
-     let upd = fun (argVals, conf) e -> let (_, _, _, Some v) as conf = Expr.eval env conf e in (v::argVals, conf) in
-     let (argVals, conf2) = List.fold_left upd ([], conf) args in
-     env#definition env fname (List.rev argVals) conf2
+                                                                                  (* Skip, k or k, Skip *)
+    | Call (fname, args) -> eval env (Expr.eval env conf (Expr.Call(fname, args))) k Skip
     | Return (eOpt)      -> (match eOpt with 
      | None   -> (s, i, o, None)
      | Some e -> Expr.eval env conf e
@@ -263,7 +261,7 @@ module Stmt =
       whl: -"while" e:!(Expr.parse) -"do" xs:seq -"od" {While (e, xs)};
       sugarfor: -"for" st:simpleStmt -"," e:!(Expr.parse) -"," st2:simpleStmt -"do" body:seq -"od" {Seq(st, While(e, Seq(body, st2)))};
       repeat: -"repeat" xs:seq -"until" e:!(Expr.parse) {Repeat(xs, e)};
-      call: fname:IDENT -"(" args:!(Expr.parse)* -")" {Call(fname, args)};
+      call: fname:IDENT -"(" args:!(Util.list0)[Expr.parse] -")" {Call(fname, args)};
       return: -"return" e:!(Expr.parse) {Return (Some e)} | -"return" {Return (None)};
       simpleStmt: read | write | assign | skip | ite | whl | sugarfor | repeat | call | return;
       seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
@@ -280,9 +278,9 @@ module Definition =
     type t = string * (string list * string list * Stmt.t)
 
     ostap (
-      loctl: -"," x:IDENT xs:loctl {x::xs} | -"" {[]};
-      loc: -"local" x:IDENT xs:loctl {x::xs} | -"" {[]};
-      parse: -"fun" fname:IDENT -"(" args:IDENT* -")" locals:loc -"{" body:!(Stmt.parse) -"}" {(fname, (args, locals, body))}
+      names: !(Util.list0)[ostap(IDENT)];
+      loc: -"local" names | -"" {[]};
+      parse: -"fun" fname:IDENT -"(" args:names -")" locals:loc -"{" body:!(Stmt.parse) -"}" {(fname, (args, locals, body))}
     )
 
   end
