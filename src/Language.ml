@@ -81,9 +81,39 @@ module Expr =
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration,
        an returns a pair: the return value for the call and the resulting configuration
     *)
-    let rec eval env ((st, i, o, r) as conf) expr = failwith "Not implemented"
 
-     (*    FURTHER RESOLVE
+    let parseBinOp op z1 z2 = match op with
+    | "+" -> z1 + z2
+    | "-" -> z1 - z2
+    | "*" -> z1 * z2
+    | "/" -> z1 / z2
+    | "%" -> z1 mod z2
+    | ">" -> b2i (z1 > z2)
+    | "<" -> b2i (z1 < z2)
+    | ">=" -> b2i (z1 >= z2)
+    | "<=" -> b2i (z1 <= z2)
+    | "==" -> b2i (z1 = z2)
+    | "!=" -> b2i (z1 <> z2)
+    | "!!" -> b2i ((i2b z1) || (i2b z2))
+    | "&&" -> b2i ((i2b z1) && (i2b z2))
+    | _ -> failwith ("unknown__operand:" ^ op)
+
+    let not e = Binop("==", e, Const 0)
+
+    let rec eval env ((s, i, o, r) as conf) expr = match expr with
+    | Const (z)           -> (s, i, o, Some z)
+    | Var (x)             -> (s, i, o, Some (State.eval s x))
+    | Binop (str, e1, e2) ->
+     let ((_, _, _, Some r2) as conf2) = eval env conf  e1 in
+     let (s3, i3, o3, Some r3) = eval env conf2 e2 in
+     (s3, i3, o3, Some (parseBinOp str r2 r3))
+    | Call (fname, args) -> 
+     let upd = fun (argVals, conf) e -> let (_, _, _, Some v) as conf = eval env conf e in (v::argVals, conf) in
+     let (argVals, conf2) = List.fold_left upd ([], conf) args in
+     env#definition env fname (List.rev argVals) conf2
+
+(*    FURTHER RESOLVE
+     (*
           val eval : state -> t -> int
 
        Takes a state and an expression, and returns the value of the expression in
@@ -135,6 +165,7 @@ module Expr =
            primary
          );
       primary: const | var | -"(" expr -")";
+      (*call: fname:IDENT -"(" args:!(parse)* -")" {Call(fname, args)};*)
       parse: expr | const | var
     )
 
@@ -164,7 +195,39 @@ module Stmt =
        Takes an environment, a configuration and a statement, and returns another configuration. The
        environment is the same as for expressions
     *)
-    let rec eval env ((st, i, o, r) as conf) k stmt = failwith "Not implemented"
+
+    let metaSeq x y = match y with
+    | Skip -> x
+    | _    -> Seq (x, y)
+
+    let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
+                                                                                          (* None? *)
+    | Read(x)            -> eval env (match i with | hd::tl -> (State.update x hd s, tl, o, None) | _ -> failwith "trying to read from empty stream") Skip k
+    | Write(e)           ->
+     let (s, i, o, Some r) = Expr.eval env conf e in
+     eval env (s, i, o @ [r], None) Skip k
+    | Assign(x, e)       ->
+     let (s, i, o, Some r) = Expr.eval env conf e in
+     eval env (State.update x r s, i, o, None) Skip k
+    | Seq (st1, st2)     -> eval env conf (metaSeq st2 k) st1
+    | Skip -> (match k with | Skip -> conf | _ -> eval env conf Skip k)
+    | If (e, br1, br2)   ->
+     let (s, i, o, Some r) = Expr.eval env conf e in
+     let br = if i2b r then br1 else br2 in
+     eval env (s, i, o, None) k br
+    | While (e, xs)      ->
+     let (s, i, o, Some r) = Expr.eval env conf e in
+     let br = if i2b r then Seq(xs, stmt) else Skip in
+     eval env (s, i, o, None) k br
+    | Repeat (xs, e)     -> eval env conf k (Seq(xs, While(Expr.not e, xs)))
+    | Call (fname, args) ->
+     let upd = fun (argVals, conf) e -> let (_, _, _, Some v) as conf = Expr.eval env conf e in (v::argVals, conf) in
+     let (argVals, conf2) = List.fold_left upd ([], conf) args in
+     env#definition env fname (List.rev argVals) conf2
+    | Return (eOpt)      -> (match eOpt with 
+     | None   -> (s, i, o, None)
+     | Some e -> Expr.eval env conf e
+     )
 
 (* FURTHER RESOLVE
     let rec eval env ((s, i, o) as conf) stmt = match stmt with
@@ -201,7 +264,8 @@ module Stmt =
       sugarfor: -"for" st:simpleStmt -"," e:!(Expr.parse) -"," st2:simpleStmt -"do" body:seq -"od" {Seq(st, While(e, Seq(body, st2)))};
       repeat: -"repeat" xs:seq -"until" e:!(Expr.parse) {Repeat(xs, e)};
       call: fname:IDENT -"(" args:!(Expr.parse)* -")" {Call(fname, args)};
-      simpleStmt: read | write | assign | skip | ite | whl | sugarfor | repeat | call;
+      return: -"return" e:!(Expr.parse) {Return (Some e)} | -"return" {Return (None)};
+      simpleStmt: read | write | assign | skip | ite | whl | sugarfor | repeat | call | return;
       seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
       parse: seq
     )
