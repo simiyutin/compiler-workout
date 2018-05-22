@@ -112,36 +112,6 @@ module Expr =
      let (argVals, conf2) = List.fold_left upd ([], conf) args in
      env#definition env fname (List.rev argVals) conf2
 
-(*    FURTHER RESOLVE
-     (*
-          val eval : state -> t -> int
-
-       Takes a state and an expression, and returns the value of the expression in
-       the given state.
-    *)
-
-
-    let parseBinOp op z1 z2 = match op with
-        "+" -> z1 + z2
-      | "-" -> z1 - z2
-      | "*" -> z1 * z2
-      | "/" -> z1 / z2
-      | "%" -> z1 mod z2
-      | ">" -> b2i (z1 > z2)
-      | "<" -> b2i (z1 < z2)
-      | ">=" -> b2i (z1 >= z2)
-      | "<=" -> b2i (z1 <= z2)
-      | "==" -> b2i (z1 = z2)
-      | "!=" -> b2i (z1 <> z2)
-      | "!!" -> b2i ((i2b z1) || (i2b z2))
-      | "&&" -> b2i ((i2b z1) && (i2b z2))
-      | _ -> failwith ("unknown__operand:" ^ op)
-
-    let rec eval s e = match e with
-        Const(z) -> z
-       | Var(x) -> State.eval s x
-       | Binop(str, e1, e2) -> parseBinOp str (eval s e1) (eval s e2)
-*)
     (* Expression parser. You can use the following terminals:
 
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
@@ -201,7 +171,6 @@ module Stmt =
     | _    -> Seq (x, y)
 
     let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
-                                                                                          (* None? *)
     | Read(x)            -> eval env (match i with | hd::tl -> (State.update x hd s, tl, o, None) | _ -> failwith "trying to read from empty stream") Skip k
     | Write(e)           ->
      let (s, i, o, Some r) = Expr.eval env conf e in
@@ -220,35 +189,11 @@ module Stmt =
      let br = if i2b r then Seq(xs, stmt) else Skip in
      eval env (s, i, o, None) k br
     | Repeat (xs, e)     -> eval env conf k (Seq(xs, While(Expr.not e, xs)))
-                                                                                  (* Skip, k or k, Skip *)
-    | Call (fname, args) -> eval env (Expr.eval env conf (Expr.Call(fname, args))) k Skip
+    | Call (fname, args) -> eval env (Expr.eval env conf (Expr.Call(fname, args))) Skip k
     | Return (eOpt)      -> (match eOpt with 
-     | None   -> (s, i, o, None)
-     | Some e -> Expr.eval env conf e
+      | None   -> (s, i, o, None)
+      | Some e -> Expr.eval env conf e
      )
-
-(* FURTHER RESOLVE
-    let rec eval env ((s, i, o) as conf) stmt = match stmt with
-    | Read(x)       -> (match i with
-                       | hd::tl -> (State.update x hd s, tl, o)
-                       | _      -> failwith "trying to read from empty stream")
-    | Write(e)       -> (s, i, o @ [Expr.eval s e])
-    | Assign(x, e)   -> (State.update x (Expr.eval s e) s, i, o)
-    | Seq(st1, st2)  -> eval env (eval env conf st1) st2
-    | Skip           -> conf
-    | If(e, br1, br2)-> if i2b @@ Expr.eval s e then eval env conf br1 else eval env conf br2
-    | While(e, xs)   -> if i2b @@ Expr.eval s e then eval env conf @@ Seq(xs, stmt) else conf
-    | Repeat(xs, e)  ->
-      let ((s', _, _) as c') = eval env conf xs in
-      if i2b @@ Expr.eval s' e then c' else eval env c' @@ Repeat(xs, e)
-    | Call(fname, args) ->
-      let (argnames, locnames, body) = env#getdef fname in
-      let upd st (x, e) = State.update x (Expr.eval s e) st in
-      let entst = State.enter s (argnames @ locnames) in
-      let entst = List.fold_left upd entst (zip argnames args) in
-      let (outst, i, o) = eval env (entst, i, o) body in
-      (State.leave outst s), i, o
-*)
 
     (* Statement parser *)
     ostap (
@@ -313,16 +258,6 @@ let eval (defs, body) i =
       body
   in
   o
-(* FURTHER RESOLVE (потенциально оставить как есть)
-let eval (defs, body) i =
-  let module M = Map.Make (String) in
-  let rec make_map m = function
-  | []              -> m
-  | (name, signature) :: tl -> make_map (M.add name signature m) tl in
-  let m = make_map M.empty defs in
-  let _, _, o = Stmt.eval (object method getdef name = M.find name m end) (State.empty, i, []) body in o
-
-*)
 (* Top-level parser *)
 ostap (
   parse: defs:!(Definition.parse)* body:!(Stmt.parse) {(defs, body)}
