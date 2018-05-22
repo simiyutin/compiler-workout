@@ -115,10 +115,14 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
  *)
+
+let compileCall fname args compiler = (List.concat @@ List.map (compiler []) args) @ [CALL(fname)]
+
 let rec compileExpr pg e = match e with
          Language.Expr.Const(z)           -> pg@[CONST z]
        | Language.Expr.Var(x)             -> pg@[LD x]
        | Language.Expr.Binop(str, e1, e2) -> pg@(compileExpr [] e2)@(compileExpr [] e1)@[BINOP str]
+       | Language.Expr.Call(fname, args)  -> pg@compileCall fname args compileExpr
 
 let freshName : string -> string =
   let module M = Map.Make (String) in
@@ -151,7 +155,8 @@ let rec compileStmt pg stmt = match stmt with
     | Language.Stmt.Repeat(st, e) ->
       let beginLabel = freshName "begin" in
       pg@[LABEL(beginLabel)]@compileStmt [] st@compileExpr [] e@[CONST(0); CJMP("e", beginLabel)]
-    | Language.Stmt.Call(fname, args) -> (List.concat @@ List.map (compileExpr []) args) @ [CALL(fname)]
+    | Language.Stmt.Call(fname, args) -> pg@compileCall fname args compileExpr
+    | Language.Stmt.Return(eOpt) -> (match eOpt with | None -> [END] | Some e -> compileExpr [] e @ [END])
 
 let compileDef (name, (argnames, locnames, body)) = [LABEL(name); BEGIN(argnames, locnames)] @ (compileStmt [] body) @ [END]
 
