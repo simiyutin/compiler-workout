@@ -67,7 +67,7 @@ let condition suff (cstack, stack, conf) = match stack with
 let handleBegin argnames locnames (cstack, stack, (st, i, o)) =
   let upd st (x, z) = State.update x z st in
   let entst = State.enter st (argnames @ locnames) in
-  let entst = List.fold_left upd entst (zip (List.rev argnames) stack) in
+  let entst = List.fold_left upd entst (zip argnames stack) in
   let rec chopn n lst = if n == 0 then lst else chopn (n - 1) @@ List.tl lst in
   (cstack, chopn (List.length argnames) stack, (entst, i, o))
 
@@ -75,21 +75,21 @@ let handleBegin argnames locnames (cstack, stack, (st, i, o)) =
 let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg with
   | [] -> conf
   | hd::tl -> ( match hd with
-        | BINOP(op) -> eval env (handleBinOp op conf) tl
-        | CONST(i)  -> eval env (handleConst i conf) tl
-        | READ      -> eval env (handleRead conf) tl
-        | WRITE     -> eval env (handleWrite conf) tl
-        | LD(x)     -> eval env (handleLoad x conf) tl
-        | ST(x)     -> eval env (handleStore x conf) tl
-        | LABEL(x)  -> eval env conf tl
-        | JMP(x)    -> eval env conf @@ env#labeled x
-        | CJMP(s, x)-> if condition s conf then eval env (pop2 conf) @@ env#labeled x else eval env (pop2 conf) tl
-        | CALL(l)   -> eval env ((tl, st)::cstack, stack, c) @@ env#labeled l
-        | END       -> (match cstack with
-                       | (p, st')::tl -> eval env (tl, stack, (State.leave st st', i, o)) p
-                       | []           -> conf
-                       )
-        | BEGIN(argnames, locnames) -> eval env (handleBegin argnames locnames conf) tl
+        | BINOP(op)     -> eval env (handleBinOp op conf) tl
+        | CONST(i)      -> eval env (handleConst i conf) tl
+        | READ          -> eval env (handleRead conf) tl
+        | WRITE         -> eval env (handleWrite conf) tl
+        | LD(x)         -> eval env (handleLoad x conf) tl
+        | ST(x)         -> eval env (handleStore x conf) tl
+        | LABEL(x)      -> eval env conf tl
+        | JMP(x)        -> eval env conf @@ env#labeled x
+        | CJMP(s, x)    -> if condition s conf then eval env (pop2 conf) @@ env#labeled x else eval env (pop2 conf) tl
+        | CALL(l, _, _) -> eval env ((tl, st)::cstack, stack, c) @@ env#labeled l
+        | END | RET _   -> (match cstack with
+                            | (p, st')::tl -> eval env (tl, stack, (State.leave st st', i, o)) p
+                            | []           -> conf
+                           )
+        | BEGIN(_, argnames, locnames) -> eval env (handleBegin argnames locnames conf) tl
   )
 
 (* Top-level evaluation
@@ -116,13 +116,13 @@ let run p i =
    stack machine
  *)
 
-let compileCall fname args compiler = (List.concat @@ List.map (compiler []) args) @ [CALL(fname)]
+let compileCall fname args isFunction compiler = (List.concat @@ List.map (compiler []) (List.rev args)) @ [CALL(fname, List.length args, isFunction)]
 
 let rec compileExpr pg e = match e with
          Language.Expr.Const(z)           -> pg@[CONST z]
        | Language.Expr.Var(x)             -> pg@[LD x]
        | Language.Expr.Binop(str, e1, e2) -> pg@(compileExpr [] e2)@(compileExpr [] e1)@[BINOP str]
-       | Language.Expr.Call(fname, args)  -> pg@compileCall fname args compileExpr
+       | Language.Expr.Call(fname, args)  -> pg@compileCall fname args true compileExpr
 
 let freshName : string -> string =
   let module M = Map.Make (String) in
@@ -145,20 +145,20 @@ let rec compileStmt pg stmt = match stmt with
     | Language.Stmt.Seq(st1, st2) -> pg@compileStmt [] st1@compileStmt [] st2
     | Language.Stmt.Skip          -> pg
     | Language.Stmt.If(e, b1, b2) ->
-      let endlabel = freshName "end" in
-      let elselabel = freshName "b2"  in
+      let endlabel = freshName "endif" in
+      let elselabel = freshName "else"  in
       pg@compileExpr [] e@[CONST(0); CJMP("e", elselabel)]@compileStmt [] b1@[JMP(endlabel); LABEL(elselabel)]@compileStmt [] b2@[LABEL(endlabel)]
     | Language.Stmt.While(e, st)  ->
-      let beginlabel = freshName "begin" in
-      let endlabel   = freshName "end" in
+      let beginlabel = freshName "whilebegin" in
+      let endlabel   = freshName "whileend" in
       pg@[LABEL(beginlabel)]@compileExpr [] e@[CONST(0); CJMP("e", endlabel)]@compileStmt [] st@[JMP(beginlabel); LABEL(endlabel)]
     | Language.Stmt.Repeat(st, e) ->
       let beginLabel = freshName "begin" in
       pg@[LABEL(beginLabel)]@compileStmt [] st@compileExpr [] e@[CONST(0); CJMP("e", beginLabel)]
-    | Language.Stmt.Call(fname, args) -> pg@compileCall fname args compileExpr
-    | Language.Stmt.Return(eOpt) -> (match eOpt with | None -> [END] | Some e -> compileExpr [] e @ [END])
+    | Language.Stmt.Call(fname, args) -> pg@compileCall fname args false compileExpr
+    | Language.Stmt.Return(eOpt) -> (match eOpt with | None -> [RET false] | Some e -> compileExpr [] e @ [RET true])
 
-let compileDef (name, (argnames, locnames, body)) = [LABEL(name); BEGIN(argnames, locnames)] @ (compileStmt [] body) @ [END]
+let compileDef (name, (argnames, locnames, body)) = [LABEL(name); BEGIN(name, argnames, locnames)] @ (compileStmt [] body) @ [END]
 
 let compile (defs, p) = (compileStmt [] p) @ [END] @ (List.concat @@ List.map compileDef defs)
 
