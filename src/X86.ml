@@ -44,7 +44,7 @@ type instr =
 (* a conditional jump                                   *) | CJmp  of string * string
 (* a non-conditional jump                               *) | Jmp   of string
 (* directive                                            *) | Meta  of string
-                                                                            
+
 (* Instruction printer *)
 let show instr =
   let binop = function
@@ -90,14 +90,84 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code = failwith "Not implemented"
-                                
+
+(* def: symbolic stack === [regs..][real stack..] *)
+(* destination: второй операнд *)
+(* семантика прибавь/вычти первый операнд ко/из второго операнда *)
+let ensureFstReg codeProducer env =
+  let fst, snd, env = env#pop2 in
+  let _, env        = env#allocate in
+  match fst with
+| S _ -> (env, Mov(fst, eax) :: codeProducer eax snd)
+| R _ -> (env, codeProducer fst snd)
+| _ -> failwith "unexpected addressing mode"
+
+let handleSimpleInstr instr env =
+  let codeProducer = fun fst snd -> [Binop(instr, snd, fst); Mov(fst, snd)] in
+  ensureFstReg codeProducer env
+
+let handleDivInstr instr env outputReg =
+  let fst, snd, env = env#pop2 in
+  let _, env        = env#allocate in
+  (env, [Mov(fst, eax); Cltd; IDiv(snd); Mov(outputReg, snd)])
+
+let handleComparisonInstr instr env =
+  let codeProducer = fun fst snd -> [Binop("cmp", snd, fst); Mov(L 0, eax); Set(instr, "%AL"); Mov(eax, snd)] in
+  ensureFstReg codeProducer env
+
+let i2b2 env =
+  let fst, snd, _ = env#pop2 in
+  let zero, env   = env#allocate in
+  let env, cmpCode = handleComparisonInstr "NE" env in
+  let swap = [Mov(fst, eax); Mov(snd, edx); Mov(eax, snd); Mov(edx, fst)] in
+  (env, [Mov(L 0, zero)] @ cmpCode @ swap @ cmpCode @ swap)
+
+let handleBooleanInstr instr env =
+  let env, convertCode = i2b2 env in
+  let env, code    = handleSimpleInstr instr env in
+  (env, convertCode @ code)
+
+let compileBinopInstr instr env = match instr with
+| "+" -> handleSimpleInstr "+" env
+| "-" -> handleSimpleInstr "-" env
+| "*" -> handleSimpleInstr "*" env
+| "/" -> handleDivInstr "/" env eax
+| "%" -> handleDivInstr "%" env edx
+| ">" -> handleComparisonInstr "G" env
+| "<" -> handleComparisonInstr "L" env
+| ">="-> handleComparisonInstr "GE" env
+| "<="-> handleComparisonInstr "LE" env
+| "=="-> handleComparisonInstr "E" env
+| "!="-> handleComparisonInstr "NE" env
+| "!!"-> handleBooleanInstr "!!" env
+| "&&"-> handleBooleanInstr "&&" env
+| _ -> failwith ("unknown__operand:" ^ instr)
+
+let compileInstr instr env = match instr with
+| CONST n   -> let s, env = env#allocate in (env, [Mov(L n, s)])
+| WRITE     -> let s, env = env#pop in (env, [Push s; Call "Lwrite"; Pop eax])
+| READ      -> let s, env = env#allocate in (env, [Call "Lread"; Mov(eax, s)])
+| LD(x)     -> let s, env = (env#global x)#allocate in (env, [Mov(M (env#loc x), eax); Mov(eax, s)])
+| ST(x)     -> let s, env = (env#global x)#pop in (env, [Mov(s, eax); Mov(eax, M (env#loc x))])
+| BINOP(x)  -> compileBinopInstr x env
+| LABEL(x)  -> (env, [Label(x)])
+| JMP(x)    -> (env, [Jmp(x)])
+| CJMP(s, x)-> let fst, snd, _ = env#pop2 in(env, [Mov(fst, eax); Binop("cmp", snd, eax); CJmp(s, x)])
+
+let rec compile env code = match code with
+| [] -> (env, [])
+| instr :: instrxs ->
+  let env, asm = compileInstr instr env in
+  let env, asmxs = compile env instrxs in
+  (env, asm @ asmxs)
+
+
 (* A set of strings *)           
 module S = Set.Make (String)
 
 (* Environment implementation *)
 let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
-                     
+
 class env =
   object (self)
     val globals     = S.empty (* a set of global variables         *)
@@ -106,13 +176,13 @@ class env =
     val args        = []      (* function arguments                *)
     val locals      = []      (* function local variables          *)
     val fname       = ""      (* function name                     *)
-                        
+
     (* gets a name for a global variable *)
     method loc x =
       try S (- (List.assoc x args)  -  1)
-      with Not_found ->  
+      with Not_found ->
         try S (List.assoc x locals) with Not_found -> M ("global_" ^ x)
-        
+
     (* allocates a fresh position on a symbolic stack *)
     method allocate =    
       let x, n =
@@ -143,24 +213,24 @@ class env =
     method globals = S.elements globals
 
     (* gets a number of stack positions allocated *)
-    method allocated = stack_slots                                
-                                
+    method allocated = stack_slots
+
     (* enters a function *)
     method enter f a l =
       {< stack_slots = List.length l; stack = []; locals = make_assoc l; args = make_assoc a; fname = f >}
 
     (* returns a label for the epilogue *)
     method epilogue = Printf.sprintf "L%s_epilogue" fname
-                                     
+
     (* returns a name for local size meta-symbol *)
     method lsize = Printf.sprintf "L%s_SIZE" fname
 
     (* returns a list of live registers *)
     method live_registers =
       List.filter (function R _ -> true | _ -> false) stack
-      
+
   end
-  
+
 (* Generates an assembler text for a program: first compiles the program into
    the stack code, then generates x86 assember code, then prints the assembler file
 *)
@@ -171,7 +241,7 @@ let genasm (ds, stmt) =
       (new env)
       ((LABEL "main") :: (BEGIN ("main", [], [])) :: SM.compile (ds, stmt))
   in
-  let data = Meta "\t.data" :: (List.map (fun s -> Meta (s ^ ":\t.int\t0")) env#globals) in 
+  let data = Meta "\t.data" :: (List.map (fun s -> Meta (s ^ ":\t.int\t0")) env#globals) in
   let asm = Buffer.create 1024 in
   List.iter
     (fun i -> Buffer.add_string asm (Printf.sprintf "%s\n" @@ show i))
