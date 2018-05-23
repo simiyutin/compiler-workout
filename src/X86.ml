@@ -44,6 +44,7 @@ type instr =
 (* a conditional jump                                   *) | CJmp  of string * string
 (* a non-conditional jump                               *) | Jmp   of string
 (* directive                                            *) | Meta  of string
+(* .set directive                                       *) | MetaSet  of string * int
 
 (* Instruction printer *)
 let show instr =
@@ -79,6 +80,7 @@ let show instr =
   | Jmp    l           -> Printf.sprintf "\tjmp\t%s" l
   | CJmp  (s , l)      -> Printf.sprintf "\tj%s\t%s" s l
   | Meta   s           -> Printf.sprintf "%s\n" s
+  | MetaSet(s, d)      -> Printf.sprintf "\t.set\t%s,\t%d" s d
 
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
@@ -144,15 +146,37 @@ let compileBinopInstr instr env = match instr with
 | _ -> failwith ("unknown__operand:" ^ instr)
 
 let compileInstr instr env = match instr with
-| CONST n   -> let s, env = env#allocate in (env, [Mov(L n, s)])
-| WRITE     -> let s, env = env#pop in (env, [Push s; Call "Lwrite"; Pop eax])
-| READ      -> let s, env = env#allocate in (env, [Call "Lread"; Mov(eax, s)])
-| LD(x)     -> let s, env = (env#global x)#allocate in (env, [Mov(M (env#loc x), eax); Mov(eax, s)])
-| ST(x)     -> let s, env = (env#global x)#pop in (env, [Mov(s, eax); Mov(eax, M (env#loc x))])
+| CONST(n)   -> let s, env = env#allocate in (env, [Mov(L n, s)])
+| WRITE      -> let s, env = env#pop in (env, [Push s; Call "Lwrite"; Pop eax])
+| READ       -> let s, env = env#allocate in (env, [Call "Lread"; Mov(eax, s)])
+| LD(x)      -> let s, env = env#allocate in (env, [Mov (env#loc x, eax); Mov (eax, s)])
+| ST(x)      -> (
+                 let v = env#loc x in
+                 let env = match v with
+                  | M _ -> env#global x
+                  | _ -> env in
+                 let s, env = env#pop in
+                 (env, [Mov (s, eax); Mov (eax, v)])
+                )
 | BINOP(x)  -> compileBinopInstr x env
 | LABEL(x)  -> (env, [Label(x)])
 | JMP(x)    -> (env, [Jmp(x)])
 | CJMP(s, x)-> let fst, snd, _ = env#pop2 in(env, [Mov(fst, eax); Binop("cmp", snd, eax); CJmp(s, x)])
+| BEGIN(fname, argnames, locnames) -> let env = env#enter fname argnames locnames in (env, [Push(ebp); Mov(esp, ebp); Binop("-", M("$" ^ env#lsize), esp)])
+| END       -> (env, [Label(env#epilogue); Mov(ebp, esp); Pop(ebp); Ret; MetaSet(env#lsize, env#allocated * word_size)])
+| RET(hasVal) -> if hasVal then let x, env = env#pop in (env, [Mov(x, eax); Jmp(env#epilogue)]) else (env, [Jmp(env#epilogue)])
+| CALL(fname, nargs, isFunction) ->
+  let pushRegisters, popRegisters = List.fold_left (fun (pushRegisters, popRegisters) reg -> Push(reg)::pushRegisters, Pop(reg)::popRegisters) ([], []) env#live_registers in
+  let env, code =
+   let rec pushArgsHelper env pushArgs n = match n with
+    | 0 -> (env, pushArgs)
+    | _ -> let x, env = env#pop in
+           pushArgsHelper env (Push(x)::pushArgs) (n - 1)
+   in
+   let env, pushArgs = pushArgsHelper env [] nargs in
+   (env, pushRegisters @ pushArgs @ [Call(fname); Binop("+", L(nargs * word_size), esp)] @ (List.rev popRegisters))
+  in
+  if isFunction then let x, env = env#allocate in (env, code @ [Mov(eax, x)]) else (env, code)
 
 let rec compile env code = match code with
 | [] -> (env, [])
@@ -166,7 +190,8 @@ let rec compile env code = match code with
 module S = Set.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+let rec arange n = let rec helper acc k = if k > 0 then helper ((k - 1)::acc) (k - 1) else acc in helper [] n
+let make_assoc l = List.combine l (arange @@ List.length l)
 
 class env =
   object (self)
@@ -184,14 +209,14 @@ class env =
         try S (List.assoc x locals) with Not_found -> M ("global_" ^ x)
 
     (* allocates a fresh position on a symbolic stack *)
-    method allocate =    
+    method allocate =
       let x, n =
 	let rec allocate' = function
-	| []                            -> ebx     , 0
-	| (S n)::_                      -> S (n+1) , n+1
-	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
+        | []                            -> ebx     , 0
+        | (S n)::_                      -> S (n+1) , n+1
+        | (R n)::_ when n < num_of_regs -> R (n+1) , n+1
         | (M _)::s                      -> allocate' s
-	| _                             -> S 0     , 1
+        | _                             -> S (List.length locals), ((List.length locals) + 1)
 	in
 	allocate' stack
       in
