@@ -7,6 +7,12 @@ open GT
 open Ostap
 open Combinators
 
+let init_list n ~f =
+  let rec init_list' acc i n f =
+    if i >= n then acc
+    else init_list' ((f i) :: acc) (i+1) n f
+  in List.rev (init_list' [] 0 n f)
+
 (* Values *)
 module Value =
   struct
@@ -30,7 +36,7 @@ module Value =
     let of_array  a = Array  a
 
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+    let update_array  a i x = init_list   (List.length a)   (fun j -> if j = i then x else List.nth a j)
 
   end
 
@@ -41,6 +47,8 @@ let rec zip lst1 lst2 = match lst1,lst2 with
   | [],_ -> []
   | _, []-> []
   | (x::xs),(y::ys) -> (x,y) :: (zip xs ys)
+
+
 
 (* States *)
 module State =
@@ -134,37 +142,35 @@ module Expr =
        an returns a pair: the return value for the call and the resulting configuration
     *)
 
-    let parseBinOp op z1 z2 = match op with
-    | "+" -> z1 + z2
-    | "-" -> z1 - z2
-    | "*" -> z1 * z2
-    | "/" -> z1 / z2
-    | "%" -> z1 mod z2
-    | ">" -> b2i (z1 > z2)
-    | "<" -> b2i (z1 < z2)
-    | ">=" -> b2i (z1 >= z2)
-    | "<=" -> b2i (z1 <= z2)
-    | "==" -> b2i (z1 = z2)
-    | "!=" -> b2i (z1 <> z2)
-    | "!!" -> b2i ((i2b z1) || (i2b z2))
-    | "&&" -> b2i ((i2b z1) && (i2b z2))
-    | _ -> failwith ("unknown__operand:" ^ op)
+   let parseBinOp op z1 z2 = 
+    match op with
+      | "+" -> z1 + z2
+      | "-" -> z1 - z2
+      | "*" -> z1 * z2
+      | "/" -> z1 / z2
+      | "%" -> z1 mod z2
+      | ">" -> b2i (z1 > z2)
+      | "<" -> b2i (z1 < z2)
+      | ">=" -> b2i (z1 >= z2)
+      | "<=" -> b2i (z1 <= z2)
+      | "==" -> b2i (z1 = z2)
+      | "!=" -> b2i (z1 <> z2)
+      | "!!" -> b2i ((i2b z1) || (i2b z2))
+      | "&&" -> b2i ((i2b z1) && (i2b z2))
+      | _ -> failwith ("unknown__operand:" ^ op)
 
     let not e = Binop("==", e, Const 0)
 
     let rec eval env ((s, i, o, r) as conf) expr = match expr with
-    | Const (z)           -> (s, i, o, Some z)
+    | Const (z)           -> (s, i, o, Some (Value.of_int z))
     | Var (x)             -> (s, i, o, Some (State.eval s x))
     | Binop (str, e1, e2) ->
      let ((_, _, _, Some r2) as conf2) = eval env conf  e1 in
      let (s3, i3, o3, Some r3) = eval env conf2 e2 in
-     (s3, i3, o3, Some (parseBinOp str r2 r3))
+     (s3, i3, o3, Some (Value.of_int @@ parseBinOp str (Value.to_int r2) (Value.to_int r3)))
     | Call (fname, args) ->
-     let upd = fun (argVals, conf) e -> let (_, _, _, Some v) as conf = eval env conf e in (v::argVals, conf) in
-     let (argVals, conf2) = List.fold_left upd ([], conf) args in
-     env#definition env fname (List.rev argVals) conf2
-
-    *)
+     let (s, i, o, args) = eval_list env conf args in
+     env#definition env fname args (s, i, o, None)
 
     and eval_list env conf xs =
       let vs, (st, i, o, _) =
@@ -234,31 +240,6 @@ module Stmt =
     | Skip -> x
     | _    -> Seq (x, y)
 
-    let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
-    | Read(x)            -> eval env (match i with | hd::tl -> (State.update x hd s, tl, o, None) | _ -> failwith "trying to read from empty stream") Skip k
-    | Write(e)           ->
-     let (s, i, o, Some r) = Expr.eval env conf e in
-     eval env (s, i, o @ [r], None) Skip k
-    | Assign(x, e)       ->
-     let (s, i, o, Some r) = Expr.eval env conf e in
-     eval env (State.update x r s, i, o, None) Skip k
-    | Seq (st1, st2)     -> eval env conf (metaSeq st2 k) st1
-    | Skip -> (match k with | Skip -> conf | _ -> eval env conf Skip k)
-    | If (e, br1, br2)   ->
-     let (s, i, o, Some r) = Expr.eval env conf e in
-     let br = if i2b r then br1 else br2 in
-     eval env (s, i, o, None) k br
-    | While (e, xs)      ->
-     let (s, i, o, Some r) = Expr.eval env conf e in
-     let br = if i2b r then Seq(xs, stmt) else Skip in
-     eval env (s, i, o, None) k br
-    | Repeat (xs, e)     -> eval env conf k (Seq(xs, While(Expr.not e, xs)))
-    | Call (fname, args) -> eval env (Expr.eval env conf (Expr.Call(fname, args))) Skip k
-    | Return (eOpt)      -> (match eOpt with
-      | None   -> (s, i, o, None)
-      | Some e -> Expr.eval env conf e
-     )
-
 
     let update st x v is =
       let rec update a v = function
@@ -272,12 +253,30 @@ module Stmt =
       in
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
 
+    let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
+    | Assign(x, [], e)       ->
+     let (s, i, o, Some r) = Expr.eval env conf e in
+     eval env (State.update x r s, i, o, None) Skip k
+    | Seq (st1, st2)     -> eval env conf (metaSeq st2 k) st1
+    | Skip -> (match k with | Skip -> conf | _ -> eval env conf Skip k)
+    | If (e, br1, br2)   ->
+     let (s, i, o, Some r) = Expr.eval env conf e in
+     let br = if i2b (Value.to_int r) then br1 else br2 in
+     eval env (s, i, o, None) k br
+    | While (e, xs)      ->
+     let (s, i, o, Some r) = Expr.eval env conf e in
+     let br = if i2b (Value.to_int r) then Seq(xs, stmt) else Skip in
+     eval env (s, i, o, None) k br
+    | Repeat (xs, e)     -> eval env conf k (Seq(xs, While(Expr.not e, xs)))
+    | Call (fname, args) -> eval env (Expr.eval env conf (Expr.Call(fname, args))) Skip k
+    | Return (eOpt)      -> (match eOpt with
+      | None   -> (s, i, o, None)
+      | Some e -> Expr.eval env conf e
+     )
 
     (* Statement parser *)
     ostap (
-      read: -"read" -"(" x:IDENT -")" {Read (x)};
-      write: -"write" -"(" e:!(Expr.parse) -")" {Write (e)};
-      assign: x:IDENT -":=" e:!(Expr.parse) {Assign (x, e)};
+      assign: x:IDENT -":=" e:!(Expr.parse) {Assign (x, [], e)};
       skip: -"skip" {Skip};
       ite: -"if" e:!(Expr.parse) -"then" branch1:seq branch2:els -"fi" {If (e, branch1, branch2)};
       els: -"else" branch:seq {branch} | -"elif" e:!(Expr.parse) -"then" branch1:seq branch2:els {If(e, branch1, branch2)} | -"" {Skip};
@@ -286,7 +285,7 @@ module Stmt =
       repeat: -"repeat" xs:seq -"until" e:!(Expr.parse) {Repeat(xs, e)};
       call: fname:IDENT -"(" args:!(Util.list0)[Expr.parse] -")" {Call(fname, args)};
       return: -"return" e:!(Expr.parse) {Return (Some e)} | -"return" {Return (None)};
-      simpleStmt: read | write | assign | skip | ite | whl | sugarfor | repeat | call | return;
+      simpleStmt: assign | skip | ite | whl | sugarfor | repeat | call | return;
       seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
       parse: seq
     )

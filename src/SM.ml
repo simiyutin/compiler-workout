@@ -40,21 +40,11 @@ let split n l =
   in
   unzip ([], l) n
 
- *)
-
 let handleBinOp op (cstack, stack, conf) = match stack with
   | h::hs::hss -> (cstack, (Language.Expr.parseBinOp op h hs)::hss, conf)
   | _          -> failwith "stack is too small"
 
 let handleConst i (cstack, stack, conf) = (cstack, i::stack, conf)
-
-let handleRead (cstack, stack, conf) = match conf with
-  | (s, h::hs, o) -> (cstack, h::stack, (s, hs, o))
-  | _             -> failwith "cannot read from empty input stream"
-
-let handleWrite (cstack, stack, (s, i, o)) = match stack with
-  | h::hs -> (cstack, hs, (s, i, o@[h]))
-  | _     -> failwith "stack is too small"
 
 let handleLoad x (cstack, stack, (s, i, o)) = (cstack, (State.eval s x)::stack, (s, i, o))
 
@@ -87,8 +77,6 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
   | hd::tl -> ( match hd with
         | BINOP(op)     -> eval env (handleBinOp op conf) tl
         | CONST(i)      -> eval env (handleConst i conf) tl
-        | READ          -> eval env (handleRead conf) tl
-        | WRITE         -> eval env (handleWrite conf) tl
         | LD(x)         -> eval env (handleLoad x conf) tl
         | ST(x)         -> eval env (handleStore x conf) tl
         | LABEL(x)      -> eval env conf tl
@@ -162,12 +150,8 @@ let freshName : string -> string =
     Printf.sprintf "%s_%d" prefix n
 
 let rec compileStmt pg stmt = match stmt with
-   (* read to stack and store it to variable *)
-    | Language.Stmt.Read(x)       -> pg@[READ]@[ST x]
-   (* evaluate expression and write from stack *)
-    | Language.Stmt.Write(e)      -> pg@compileExpr [] e@[WRITE]
    (* evaluate expression and store it to variable *)
-    | Language.Stmt.Assign(x, e)  -> pg@compileExpr [] e@[ST x]
+    | Language.Stmt.Assign(x, [], e)  -> pg@compileExpr [] e@[ST x]
    (* concatenate programs recursively *)
     | Language.Stmt.Seq(st1, st2) -> pg@compileStmt [] st1@compileStmt [] st2
     | Language.Stmt.Skip          -> pg

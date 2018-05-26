@@ -147,8 +147,6 @@ let compileBinopInstr instr env = match instr with
 
 let compileInstr instr env = match instr with
 | CONST(n)   -> let s, env = env#allocate in (env, [Mov(L n, s)])
-| WRITE      -> let s, env = env#pop in (env, [Push s; Call "Lwrite"; Pop eax])
-| READ       -> let s, env = env#allocate in (env, [Call "Lread"; Mov(eax, s)])
 | LD(x)      -> let s, env = env#allocate in (env, [Mov (env#loc x, eax); Mov (eax, s)])
 | ST(x)      -> (
                  let v = env#loc x in
