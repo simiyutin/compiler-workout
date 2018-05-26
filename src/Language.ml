@@ -205,11 +205,18 @@ module Expr =
 
     *)
     let bop op x y = Binop (op, x, y)
+
     ostap (
       const: x:DECIMAL {Const(x)};
+      chr: x:CHAR {Const(Char.code x)};
+      str: x:STRING {String(String.sub x 1 @@ (String.length x) - 2)};
       var: x:IDENT {Var(x)};
+      arr: -"[" elements:!(Util.list0)[parse] -"]" {Array(elements)};
+      len: e:(elm | primary) -".length" {Length(e)};
+      idx: -"[" i:parse -"]" is:idx {i::is} | -"[" i:parse -"]" {[i]};
+      elm: a:primary idxs:idx {List.fold_left (fun e i -> Elem(e, i)) (Elem(a, List.hd idxs)) (List.tl idxs)};
       call: fname:IDENT -"(" args:!(Util.list0)[parse] -")" {Call(fname, args)};
-      expr:
+      binary:
   	!(Util.expr
            (fun x -> x)
            [|
@@ -219,10 +226,11 @@ module Expr =
              `Lefta , [ostap ("+"), bop "+"; ostap ("-"), bop "-"];
              `Lefta, [ostap ("*"), bop "*"; ostap ("/"), bop "/"; ostap ("%"), bop "%"];
            |]
-           primary
+           unary
          );
-      primary: call | const | var | -"(" expr -")";
-      parse: expr | call | const | var
+      primary: arr | call | str | chr | const | var | -"(" parse -")";
+      unary: len | elm | primary;
+      parse: binary | unary
     )
 
   end
@@ -267,6 +275,10 @@ module Stmt =
       in
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
 
+(*
+    let rec eval env ((s, i, o, r) as conf) k stmt = failwith "not implemented"
+*)
+
     let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
     | Assign(x, idxs, e)       ->
      let (s, i, o, idxs) = Expr.eval_list env conf idxs in
@@ -291,7 +303,8 @@ module Stmt =
 
     (* Statement parser *)
     ostap (
-      assign: x:IDENT -":=" e:!(Expr.parse) {Assign (x, [], e)};
+      idx: -"[" e:!(Expr.parse) -"]" exs:idx {e::exs} | -"" {[]};
+      assign: x:IDENT idxs:idx -":=" e:!(Expr.parse) {Assign (x, idxs, e)};
       skip: -"skip" {Skip};
       ite: -"if" e:!(Expr.parse) -"then" branch1:seq branch2:els -"fi" {If (e, branch1, branch2)};
       els: -"else" branch:seq {branch} | -"elif" e:!(Expr.parse) -"then" branch1:seq branch2:els {If(e, branch1, branch2)} | -"" {Skip};
