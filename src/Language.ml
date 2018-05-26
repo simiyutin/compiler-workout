@@ -163,6 +163,20 @@ module Expr =
 
     let rec eval env ((s, i, o, r) as conf) expr = match expr with
     | Const (z)           -> (s, i, o, Some (Value.of_int z))
+    | String (x)          -> (s, i, o, Some (Value.of_string x))
+
+    | Array (es)          -> 
+     let (s, i, o, xs) = eval_list env conf es in
+     env#definition env "$array" xs (s, i, o, None)
+
+    | Elem (a, i)         -> 
+     let (s, i, o, ai) = eval_list env conf [a; i] in
+     env#definition env "$elem" ai (s, i, o, None)
+
+    | Length (e)          ->
+     let (s, i, o, Some a) = eval env conf e in
+     env#definition env "$length" [a] (s, i, o, None)
+
     | Var (x)             -> (s, i, o, Some (State.eval s x))
     | Binop (str, e1, e2) ->
      let ((_, _, _, Some r2) as conf2) = eval env conf  e1 in
@@ -254,9 +268,10 @@ module Stmt =
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
 
     let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
-    | Assign(x, [], e)       ->
+    | Assign(x, idxs, e)       ->
+     let (s, i, o, idxs) = Expr.eval_list env conf idxs in
      let (s, i, o, Some r) = Expr.eval env conf e in
-     eval env (State.update x r s, i, o, None) Skip k
+     eval env (update s x r idxs, i, o, None) Skip k
     | Seq (st1, st2)     -> eval env conf (metaSeq st2 k) st1
     | Skip -> (match k with | Skip -> conf | _ -> eval env conf Skip k)
     | If (e, br1, br2)   ->
