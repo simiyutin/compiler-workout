@@ -211,12 +211,16 @@ module Expr =
       chr: x:CHAR {Const(Char.code x)};
       str: x:STRING {String(String.sub x 1 @@ (String.length x) - 2)};
       var: x:IDENT {Var(x)};
-      arr: -"[" elements:!(Util.list0)[parse] -"]" {Array(elements)};
-      len: e:(elm | primary) -".length" {Length(e)};
-      idx: -"[" i:parse -"]" is:idx {i::is} | -"[" i:parse -"]" {[i]};
-      elm: a:primary idxs:idx {List.fold_left (fun e i -> Elem(e, i)) (Elem(a, List.hd idxs)) (List.tl idxs)};
       call: fname:IDENT -"(" args:!(Util.list0)[parse] -")" {Call(fname, args)};
-      binary:
+      arr: -"[" elements:!(Util.list0)[parse] -"]" {Array(elements)};
+
+      primary: arr | call | str | chr | const | var | -"(" parse -")";
+
+      idx: -"[" i:parse -"]" {`e i};
+      len: -".length" {`l};
+      unary: expr:primary ex:(idx | len)* {List.fold_left (fun expr -> function `e i -> Elem(expr, i) | `l -> Length expr) expr ex};
+
+      parse:
   	!(Util.expr
            (fun x -> x)
            [|
@@ -227,10 +231,7 @@ module Expr =
              `Lefta, [ostap ("*"), bop "*"; ostap ("/"), bop "/"; ostap ("%"), bop "%"];
            |]
            unary
-         );
-      primary: arr | call | str | chr | const | var | -"(" parse -")";
-      unary: len | elm | primary;
-      parse: binary | unary
+         )
     )
 
   end
@@ -317,6 +318,7 @@ module Stmt =
       seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
       parse: seq
     )
+
 
   end
 
