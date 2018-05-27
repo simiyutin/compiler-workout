@@ -41,8 +41,8 @@ let split n l =
   unzip ([], l) n
 
 let handleBinOp op (cstack, stack, conf) = match stack with
-  | h::hs::hss -> (cstack, (Language.Expr.parseBinOp op h hs)::hss, conf)
-  | _          -> failwith "stack is too small"
+  | h::hs::hss -> (cstack, (Value.of_int @@ Expr.parseBinOp op (Value.to_int h) (Value.to_int hs))::hss, conf)
+  | _          -> failwith "binop: stack is too small"
 
 let handleConst i (cstack, stack, conf) = (cstack, i::stack, conf)
 
@@ -50,7 +50,7 @@ let handleLoad x (cstack, stack, (s, i, o)) = (cstack, (State.eval s x)::stack, 
 
 let handleStore x (cstack, stack, (s, i, o)) = match stack with
   | h::hs -> (cstack, hs, (State.update x h s, i, o))
-  | _     -> failwith "stack is too small"
+  | _     -> failwith "store: stack is too small"
 
 let pop2 (cstack, stack, conf) = match stack with
   | _::_::tl -> (cstack, tl, conf)
@@ -75,19 +75,24 @@ let handleBegin argnames locnames (cstack, stack, (st, i, o)) =
 let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg with
   | [] -> conf
   | hd::tl -> ( match hd with
+
         | BINOP(op)     -> eval env (handleBinOp op conf) tl
-        | CONST(i)      -> eval env (handleConst i conf) tl
+        | CONST(i)      -> eval env (handleConst (Language.Value.of_int i) conf) tl
+        | STRING(x)     -> eval env (handleConst (Language.Value.of_string x) conf) tl
         | LD(x)         -> eval env (handleLoad x conf) tl
         | ST(x)         -> eval env (handleStore x conf) tl
         | LABEL(x)      -> eval env conf tl
         | JMP(x)        -> eval env conf @@ env#labeled x
         | CJMP(s, x)    -> if condition s conf then eval env (pop2 conf) @@ env#labeled x else eval env (pop2 conf) tl
-        | CALL(l, _, _) -> eval env ((tl, st)::cstack, stack, c) @@ env#labeled l
+        | STA(x, n)     -> let v::idxs, stackxs = split (n + 1) stack in eval env (cstack, stackxs, (Language.Stmt.update st x v (List.rev idxs), i, o)) tl
+        | CALL(l, nargs, isFunction) -> if env#is_label l then eval env ((tl, st)::cstack, stack, c) @@ env#labeled l else eval env (env#builtin conf l nargs (not isFunction)) tl
+
         | END | RET _   -> (match cstack with
                             | (p, st')::tl -> eval env (tl, stack, (State.leave st st', i, o)) p
                             | []           -> conf
                            )
         | BEGIN(_, argnames, locnames) -> eval env (handleBegin argnames locnames conf) tl
+
   )
 
 (* Top-level evaluation
@@ -131,13 +136,17 @@ let run p i =
    stack machine
  *)
 
-let compileCall fname args isFunction compiler = (List.concat @@ List.map (compiler []) (List.rev args)) @ [CALL(fname, List.length args, isFunction)]
+let compileCall fname args isFunction compiler = (List.concat @@ List.map (compiler []) args) @ [CALL(fname, List.length args, isFunction)]
 
 let rec compileExpr pg e = match e with
          Language.Expr.Const(z)           -> pg@[CONST z]
        | Language.Expr.Var(x)             -> pg@[LD x]
+       | Language.Expr.String(x)          -> pg@[STRING x]
+       | Language.Expr.Array(xs)          -> pg@compileCall "$array" xs true compileExpr
+       | Language.Expr.Elem(a, i)         -> pg@compileCall "$elem" [a; i] true compileExpr
+       | Language.Expr.Length(e)          -> pg@compileCall "$length" [e] true compileExpr
        | Language.Expr.Binop(str, e1, e2) -> pg@(compileExpr [] e2)@(compileExpr [] e1)@[BINOP str]
-       | Language.Expr.Call(fname, args)  -> pg@compileCall fname args true compileExpr
+       | Language.Expr.Call(fname, args)  -> pg@compileCall fname (List.rev args) true compileExpr
 
 let freshName : string -> string =
   let module M = Map.Make (String) in
@@ -151,7 +160,10 @@ let freshName : string -> string =
 
 let rec compileStmt pg stmt = match stmt with
    (* evaluate expression and store it to variable *)
-    | Language.Stmt.Assign(x, [], e)  -> pg@compileExpr [] e@[ST x]
+    | Language.Stmt.Assign(x, idxs, e)  -> (match idxs with
+      | [] -> pg@compileExpr [] e@[ST x]
+      | idxs -> pg@(List.concat @@ List.map (compileExpr []) idxs)@compileExpr [] e@[STA(x, List.length idxs)]
+    )
    (* concatenate programs recursively *)
     | Language.Stmt.Seq(st1, st2) -> pg@compileStmt [] st1@compileStmt [] st2
     | Language.Stmt.Skip          -> pg
@@ -166,7 +178,7 @@ let rec compileStmt pg stmt = match stmt with
     | Language.Stmt.Repeat(st, e) ->
       let beginLabel = freshName "begin" in
       pg@[LABEL(beginLabel)]@compileStmt [] st@compileExpr [] e@[CONST(0); CJMP("e", beginLabel)]
-    | Language.Stmt.Call(fname, args) -> pg@compileCall fname args false compileExpr
+    | Language.Stmt.Call(fname, args) -> pg@compileCall fname (List.rev args) false compileExpr
     | Language.Stmt.Return(eOpt) -> (match eOpt with | None -> [RET false] | Some e -> compileExpr [] e @ [RET true])
 
 let compileDef (name, (argnames, locnames, body)) = [LABEL(name); BEGIN(name, argnames, locnames)] @ (compileStmt [] body) @ [END]
