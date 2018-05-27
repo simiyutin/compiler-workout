@@ -85,7 +85,12 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
         | JMP(x)        -> eval env conf @@ env#labeled x
         | CJMP(s, x)    -> if condition s conf then eval env (pop2 conf) @@ env#labeled x else eval env (pop2 conf) tl
         | STA(x, n)     -> let v::idxs, stackxs = split (n + 1) stack in eval env (cstack, stackxs, (Language.Stmt.update st x v (List.rev idxs), i, o)) tl
-        | CALL(l, nargs, isFunction) -> if env#is_label l then eval env ((tl, st)::cstack, stack, c) @@ env#labeled l else eval env (env#builtin conf l nargs (not isFunction)) tl
+        | CALL(fname, nargs, isFunction) -> (
+            let flabel = "L" ^ fname in
+            if env#is_label flabel
+            then eval env ((tl, st)::cstack, stack, c) @@ env#labeled flabel
+            else eval env (env#builtin conf fname nargs (not isFunction)) tl
+        )
 
         | END | RET _   -> (match cstack with
                             | (p, st')::tl -> eval env (tl, stack, (State.leave st st', i, o)) p
@@ -181,7 +186,7 @@ let rec compileStmt pg stmt = match stmt with
     | Language.Stmt.Call(fname, args) -> pg@compileCall fname (List.rev args) false compileExpr
     | Language.Stmt.Return(eOpt) -> (match eOpt with | None -> [RET false] | Some e -> compileExpr [] e @ [RET true])
 
-let compileDef (name, (argnames, locnames, body)) = [LABEL(name); BEGIN(name, argnames, locnames)] @ (compileStmt [] body) @ [END]
+let compileDef (name, (argnames, locnames, body)) = [LABEL("L" ^ name); BEGIN(name, argnames, locnames)] @ (compileStmt [] body) @ [END]
 
 let compile (defs, p) = (compileStmt [] p) @ [END] @ (List.concat @@ List.map compileDef defs)
 

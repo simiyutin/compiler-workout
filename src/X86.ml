@@ -172,7 +172,7 @@ let compileInstr instr env = match instr with
            pushArgsHelper env (Push(x)::pushArgs) (n - 1)
    in
    let env, pushArgs = pushArgsHelper env [] nargs in
-   (env, pushRegisters @ pushArgs @ [Call(fname); Binop("+", L(nargs * word_size), esp)] @ (List.rev popRegisters))
+   (env, pushRegisters @ pushArgs @ [Call("L" ^ fname); Binop("+", L(nargs * word_size), esp)] @ (List.rev popRegisters))
   in
   if isFunction then let x, env = env#allocate in (env, code @ [Mov(eax, x)]) else (env, code)
 
