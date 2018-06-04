@@ -127,7 +127,7 @@ let compile env code =
                is @ [x; v] @ [Push (L (n-2))]
             | _  -> List.rev pushs 
           in
-          env, pushr @ pushs @ [Call f; Binop ("+", L (n*4), esp)] @ (List.rev popr)
+          env, pushr @ pushs @ [Call f; Binop ("+", L (n * word_size), esp)] @ (List.rev popr)
       in
       (if p then env, code else let y, env = env#allocate in env, code @ [Mov (eax, y)])
     in
@@ -264,7 +264,7 @@ module S = Set.Make (String)
 module M = Map.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+let make_assoc l = List.combine l (Language.init_list (List.length l) (fun x -> x))
                      
 class env =
   object (self)
