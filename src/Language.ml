@@ -241,6 +241,7 @@ module Expr =
     | Call (fname, args) ->
      let (s, i, o, args) = eval_list env conf args in
      env#definition env fname args (s, i, o, None)
+    | _ -> failwith "expression evaluator: unimplemented operand"
     and eval_list env conf xs =
       let vs, (st, i, o, _) =
         List.fold_left
@@ -376,6 +377,7 @@ let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
       | None   -> (s, i, o, None)
       | Some e -> Expr.eval env conf e
      )
+    | _ -> failwith "statement evaluator: unimplemented operand"
 
     (* Statement parser *)
     ostap (
