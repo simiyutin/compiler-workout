@@ -80,7 +80,7 @@ let condition suff (cstack, stack, conf) = match stack with
 let handleBegin argnames locnames (cstack, stack, (st, i, o)) =
   let upd st (x, z) = State.update x z st in
   let entst = State.enter st (argnames @ locnames) in
-  let entst = List.fold_left upd entst (zip argnames stack) in
+  let entst = List.fold_left upd entst (zip (List.rev argnames) stack) in
   let rec chopn n lst = if n == 0 then lst else chopn (n - 1) @@ List.tl lst in
   (cstack, chopn (List.length argnames) stack, (entst, i, o))
 
@@ -170,7 +170,7 @@ let compile (defs, p) =
        | Language.Expr.Elem(a, i)         -> call ".elem" [a; i] false
        | Language.Expr.Length(e)          -> call ".length" [e] false
        | Language.Expr.Binop(str, e1, e2) -> (expr e1)@(expr e2)@[BINOP str]
-       | Language.Expr.Call(fname, args)  -> call fname (List.rev args) false
+       | Language.Expr.Call(fname, args)  -> call fname (args) false
 
  in
   (* returns (env, flag (???), code) *)
@@ -208,7 +208,7 @@ let compile (defs, p) =
       let code = [LABEL(beginLabel)]@ repeatBodyCode @expr e@[CJMP("e", beginLabel)] in
       (env, false, code)
 
-    | Language.Stmt.Call(fname, args) -> (env, false, call fname (List.rev args) true)
+    | Language.Stmt.Call(fname, args) -> (env, false, call fname (args) true)
 
     | Language.Stmt.Return(eOpt) -> (env, false, (match eOpt with | None -> [RET false] | Some e -> expr e @ [RET true]))
 
