@@ -225,6 +225,10 @@ module Expr =
      let (s, i, o, xs) = eval_list env conf es in
      env#definition env ".array" xs (s, i, o, None)
 
+    | Sexp(t, es) -> 
+     let (s, i, o, xs) = eval_list env conf es in
+     (s, i, o, Some(Value.sexp t xs))
+
     | Elem (a, i)         -> 
      let (s, i, o, ai) = eval_list env conf [a; i] in
      env#definition env ".elem" ai (s, i, o, None)
@@ -268,8 +272,6 @@ let bop op x y = Binop (op, x, y)
       var: x:IDENT {Var(x)};
       call: fname:IDENT -"(" args:!(Util.list0)[parse] -")" {Call(fname, args)};
       arr: -"[" elements:!(Util.list0)[parse] -"]" {Array(elements)};
-
-      (* DIFF *)
       sexp: -"`" x:IDENT -"(" args:!(Util.list0)[parse] -")" {Sexp(x, args)} | -"`" x:IDENT {Sexp(x, [])};
 
       primary: arr | call | str | sexp | chr | const | var | -"(" parse -")";
@@ -356,6 +358,7 @@ let metaSeq x y = match y with
     | Skip -> x
     | _    -> Seq (x, y)
 
+
 let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
     | Assign(x, idxs, e)       ->
      let (s, i, o, idxs) = Expr.eval_list env conf idxs in
@@ -377,6 +380,32 @@ let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
       | None   -> (s, i, o, None)
       | Some e -> Expr.eval env conf e
      )
+    | Case (e, patterns) -> 
+     let (s, i, o, Some r) as conf1 = Expr.eval env conf e in
+     let rec matchPattern p r s =
+       let safeUpdate x r sOpt = (match sOpt with None -> None | Some s -> Some(State.bind x r s)) in 
+         (match p, r with
+           | Pattern.Ident x, r -> safeUpdate x r s
+           | Pattern.Wildcard, r -> s
+           | Pattern.Sexp(t1, patterns), Value.Sexp(t2, values) when t1 = t2 -> matchSexps patterns values s
+           | _ -> None
+         )
+       and matchSexps patterns values s = (match patterns, values with
+           | [], [] -> s
+           | p::ps, v::vs -> matchSexps ps vs (matchPattern p v s)
+           | _ -> None
+         )
+     in
+     let rec handleCase ((s, i, o, _) as conf) patterns = (match patterns with
+      | [] -> failwith "pattern matching failed: no branch found"
+      | (p, b)::tl ->
+       let sOpt = matchPattern p r (Some State.undefined) in (match sOpt with 
+        | None -> handleCase conf tl
+        | Some s1 -> eval env (State.push s s1 (Pattern.vars p), i, o, None) k (Seq(b, Leave))
+       )
+     ) in
+     handleCase conf1 patterns
+    | Leave -> eval env (State.drop s, i, o, r) Skip k
     | _ -> failwith "statement evaluator: unimplemented operand"
 
     (* Statement parser *)
@@ -389,7 +418,6 @@ let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
       whl: -"while" e:!(Expr.parse) -"do" xs:seq -"od" {While (e, xs)};
       sugarfor: -"for" st:simpleStmt -"," e:!(Expr.parse) -"," st2:simpleStmt -"do" body:seq -"od" {Seq(st, While(e, Seq(body, st2)))};
       repeat: -"repeat" xs:seq -"until" e:!(Expr.parse) {Repeat(xs, e)};
-      (* DIFF *)
       case: -"case" e:!(Expr.parse) -"of" pts:!(Util.listBy)[ostap("|")][ostap(p:!(Pattern.parse) -"->" s:parse {(p, s)})] -"esac" {Case(e, pts)};
       call: fname:IDENT -"(" args:!(Util.list0)[Expr.parse] -")" {Call(fname, args)};
       return: -"return" e:!(Expr.parse) {Return (Some e)} | -"return" {Return (None)};
