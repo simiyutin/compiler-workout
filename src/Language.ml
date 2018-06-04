@@ -268,7 +268,10 @@ let bop op x y = Binop (op, x, y)
       call: fname:IDENT -"(" args:!(Util.list0)[parse] -")" {Call(fname, args)};
       arr: -"[" elements:!(Util.list0)[parse] -"]" {Array(elements)};
 
-      primary: arr | call | str | chr | const | var | -"(" parse -")";
+      (* DIFF *)
+      sexp: -"`" x:IDENT -"(" args:!(Util.list0)[parse] -")" {Sexp(x, args)} | -"`" x:IDENT {Sexp(x, [])};
+
+      primary: arr | call | str | sexp | chr | const | var | -"(" parse -")";
 
       idx: -"[" i:parse -"]" {`e i};
       len: -".length" {`l};
@@ -307,7 +310,8 @@ module Stmt =
 
         (* Pattern parser *)                                 
         ostap (
-          parse: empty {failwith "Not implemented"}
+          recurr: -"`" x:IDENT -"(" args:!(Util.list0)[parse] -")" {Sexp(x, args)} | -"`" x:IDENT {Sexp(x, [])};
+          parse: recurr | -"_" {Wildcard} | x:IDENT {Ident(x)}
         )
         
         let vars p =
@@ -383,9 +387,11 @@ let rec eval env ((s, i, o, r) as conf) k stmt = match stmt with
       whl: -"while" e:!(Expr.parse) -"do" xs:seq -"od" {While (e, xs)};
       sugarfor: -"for" st:simpleStmt -"," e:!(Expr.parse) -"," st2:simpleStmt -"do" body:seq -"od" {Seq(st, While(e, Seq(body, st2)))};
       repeat: -"repeat" xs:seq -"until" e:!(Expr.parse) {Repeat(xs, e)};
+      (* DIFF *)
+      case: -"case" e:!(Expr.parse) -"of" pts:!(Util.listBy)[ostap("|")][ostap(p:!(Pattern.parse) -"->" s:parse {(p, s)})] -"esac" {Case(e, pts)};
       call: fname:IDENT -"(" args:!(Util.list0)[Expr.parse] -")" {Call(fname, args)};
       return: -"return" e:!(Expr.parse) {Return (Some e)} | -"return" {Return (None)};
-      simpleStmt: assign | skip | ite | whl | sugarfor | repeat | call | return;
+      simpleStmt: assign | skip | ite | whl | sugarfor | repeat | call | case| return;
       seq: x:simpleStmt -";" xs:seq {Seq(x, xs)} | simpleStmt;
       parse: seq
     )
