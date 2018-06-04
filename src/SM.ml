@@ -65,11 +65,15 @@ let pop2 (cstack, stack, conf) = match stack with
   | _::_::tl -> (cstack, tl, conf)
   | _        -> failwith("pop2: stack is too small")
 
-let condition suff (cstack, stack, conf) = match stack with
-  | h::hs::hss -> (match suff with
+let pop1 (cstack, stack, conf) = match stack with
+  | _::tl -> (cstack, tl, conf)
+  | _        -> failwith("pop1: stack is too small")
 
-    | "e" -> h = hs
-    | _   -> failwith "unimplemented operation"
+let condition suff (cstack, stack, conf) = match stack with
+  | h::hs -> (match suff with
+
+    | "e" -> (Value.to_int h) = 0
+    | _   -> failwith "condition: unimplemented operation"
   )
   | _          -> failwith "condition: stack is too small"
 
@@ -92,7 +96,7 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
         | ST(x)         -> eval env (handleStore x conf) tl
         | LABEL(x)      -> eval env conf tl
         | JMP(x)        -> eval env conf @@ env#labeled x
-        | CJMP(s, x)    -> if condition s conf then eval env (pop2 conf) @@ env#labeled x else eval env (pop2 conf) tl
+        | CJMP(s, x)    -> if condition s conf then eval env (pop1 conf) @@ env#labeled x else eval env (pop1 conf) tl
         | STA(x, n)     -> let v::idxs, stackxs = split (n + 1) stack in eval env (cstack, stackxs, (Language.Stmt.update st x v (List.rev idxs), i, o)) tl
         | CALL(f, nargs, isProcedure) -> (
             if env#is_label f
@@ -188,20 +192,20 @@ let compile (defs, p) =
       let elselabel, env = env#get_label "else"  in
       let env, _, thenCode = compile_stmt l env b1 in
       let env, _, elseCode = compile_stmt l env b2 in
-      let code = expr e@[CONST(0); CJMP("e", elselabel)]@thenCode@[JMP(endlabel); LABEL(elselabel)]@elseCode@[LABEL(endlabel)] in
+      let code = expr e@[CJMP("e", elselabel)]@thenCode@[JMP(endlabel); LABEL(elselabel)]@elseCode@[LABEL(endlabel)] in
       (env, false, code)
 
     | Language.Stmt.While(e, st)  ->
       let beginlabel, env = env#get_label "whilebegin" in
       let endlabel, env   = env#get_label "whileend" in
       let env, _, whileBodyCode = compile_stmt l env st in
-      let code = [LABEL(beginlabel)]@expr e@[CONST(0); CJMP("e", endlabel)]@ whileBodyCode @[JMP(beginlabel); LABEL(endlabel)] in
+      let code = [LABEL(beginlabel)]@expr e@[CJMP("e", endlabel)]@ whileBodyCode @[JMP(beginlabel); LABEL(endlabel)] in
       (env, false, code)
 
     | Language.Stmt.Repeat(st, e) ->
       let beginLabel, env = env#get_label "begin" in
       let env, _, repeatBodyCode = compile_stmt l env st in
-      let code = [LABEL(beginLabel)]@ repeatBodyCode @expr e@[CONST(0); CJMP("e", beginLabel)] in
+      let code = [LABEL(beginLabel)]@ repeatBodyCode @expr e@[CJMP("e", beginLabel)] in
       (env, false, code)
 
     | Language.Stmt.Call(fname, args) -> (env, false, call fname (List.rev args) true)
