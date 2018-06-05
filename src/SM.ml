@@ -109,6 +109,7 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
                             | []           -> conf
                            )
         | BEGIN(_, argnames, locnames) -> eval env (handleBegin argnames locnames conf) tl
+        | _ -> failwith "SM: eval: unknown token"
 
   )
 
@@ -171,6 +172,7 @@ let compile (defs, p) =
        | Language.Expr.Length(e)          -> call ".length" [e] false
        | Language.Expr.Binop(str, e1, e2) -> (expr e1)@(expr e2)@[BINOP str]
        | Language.Expr.Call(fname, args)  -> call fname (args) false
+       | _ -> failwith "SM: expr: unknown expr"
 
  in
   (* returns (env, flag (???), code) *)
@@ -211,6 +213,8 @@ let compile (defs, p) =
     | Language.Stmt.Call(fname, args) -> (env, false, call fname (args) true)
 
     | Language.Stmt.Return(eOpt) -> (env, false, (match eOpt with | None -> [RET false] | Some e -> expr e @ [RET true]))
+
+    | _ -> failwith "SM: compile_stmt: unknown statement"
 
 
  in
