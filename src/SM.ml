@@ -178,24 +178,6 @@ let compile (defs, p) =
   let rec call f args p =
     let args_code = List.concat @@ List.map expr args in
     args_code @ [CALL (label f, List.length args, p)]
-  and pattern lfalse p = match p with 
-       | Stmt.Pattern.Wildcard -> false, [DROP]
-       | Stmt.Pattern.Ident(x) -> false, [DROP]
-       | Stmt.Pattern.Sexp(t, patterns) -> 
-         let code = [DUP; TAG t; CJMP("e", lfalse)] @ 
-                    (List.concat @@ List.mapi (fun i ptr -> 
-                     let _, code = pattern lfalse ptr in 
-                     [DUP; CONST(i); CALL(".elem", 2, false)] @ code
-                    ) patterns) in
-         (false, code)
-  and bindings p = match p with
-       | Stmt.Pattern.Wildcard -> [DROP]
-       | Stmt.Pattern.Ident(x) -> [SWAP]
-       | Stmt.Pattern.Sexp(t, patterns) ->
-                    (List.concat @@ List.mapi (fun i ptr -> 
-                     let code = bindings ptr in
-                     [DUP; CONST(i); CALL(".elem", 2, false)] @ code
-                    ) patterns)
   and expr e = match e with
          Language.Expr.Const(z)           -> [CONST z]
        | Language.Expr.Var(x)             -> [LD x]
@@ -249,16 +231,37 @@ let compile (defs, p) =
 
     | Language.Stmt.Return(eOpt) -> (env, false, (match eOpt with | None -> [RET false] | Some e -> expr e @ [RET true]))
 
-    | Language.Stmt.Case(e, patterns) -> 
+    | Language.Stmt.Case(e, patterns) ->
+      let rec pattern lfalse p = match p with 
+       | Stmt.Pattern.Wildcard -> false, []
+       | Stmt.Pattern.Ident(x) -> false, []
+       | Stmt.Pattern.Sexp(t, patterns) -> 
+         let code = [DUP; TAG t; CJMP("e", lfalse)] @ 
+                    (List.concat @@ List.mapi (fun i ptr -> 
+                     let _, pcode = pattern lfalse ptr in 
+                     [DUP; CONST(i); CALL(".elem", 2, false)] @ pcode @ [DROP]
+                    ) patterns) in
+         (false, code)
+      and bindings p = match p with
+       | Stmt.Pattern.Wildcard -> [DROP]
+       | Stmt.Pattern.Ident(x) -> [SWAP]
+       | Stmt.Pattern.Sexp(t, patterns) ->
+                    (List.concat @@ List.mapi (fun i ptr -> 
+                     let code = bindings ptr in
+                     [DUP; CONST(i); CALL(".elem", 2, false)] @ code
+                    ) patterns) @ [DROP]
+      in
       let endLabel, env = env#get_label "caseend" in
-      let code, env = List.fold_left (fun (code, env) (p, s) -> 
+      let exprCode = expr e in
+      let branchCode, env = List.fold_left (fun (code, env) (p, s) -> 
         let lfalse, env = env#get_label "casefalse" in
         let _, pcode = pattern lfalse p in
+        let bcode = bindings p in
         let env, _, scode = compile_stmt l env (Stmt.Seq(s, Stmt.Leave)) in
-        let bcode = pcode @ bindings p @ [DROP; ENTER(Stmt.Pattern.vars p)] @ scode @ [JMP(endLabel); LABEL(lfalse)] in
-        (bcode::code, env)
+        let branchCode = pcode @ bcode @ [ENTER(Stmt.Pattern.vars p)] @ scode @ [JMP(endLabel); LABEL(lfalse)] in
+        (branchCode::code, env)
       ) ([], env) patterns in
-      (env, false, expr e @ (List.concat @@ List.rev code) @ [LABEL(endLabel)])
+      (env, false, exprCode @ (List.concat @@ List.rev branchCode) @ [LABEL(endLabel)])
 
     | Language.Stmt.Leave -> (env, false, [LEAVE])
 
