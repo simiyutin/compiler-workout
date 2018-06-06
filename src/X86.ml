@@ -125,12 +125,13 @@ let compile env code =
           let pushs      =
             match f with
             | "Barray" -> List.rev @@ (Push (L n))     :: pushs
+            | "Bsexp" -> List.rev @@ (Push (L n))     :: pushs
             | "Bsta"   ->
                let x::v::is = List.rev pushs in               
                is @ [x; v] @ [Push (L (n-2))]
             | _  -> List.rev pushs 
           in
-          env, pushr @ pushs @ [Call f; Binop ("+", L (n * word_size), esp)] @ (List.rev popr)
+          env, pushr @ pushs @ [Call f; Binop ("+", L ((List.length pushs) * word_size), esp)] @ (List.rev popr)
       in
       (if p then env, code else let y, env = env#allocate in env, code @ [Mov (eax, y)])
     in
@@ -230,11 +231,14 @@ let compile env code =
                  then [Mov   (x, eax); Binop (op, eax, y)]
                  else [Binop (op, x, y)]
              )
-          | LABEL s     -> env, [Label s]
-	  | JMP   l     -> env, [Jmp l]
+          | LABEL l     -> (env#drop_barrier)#retrieve_stack l, [Label l]
+	  | JMP   l     -> 
+            let env = env#set_stack l in
+            let env = env#set_barrier in
+            env, [Jmp l]
           | CJMP (s, l) ->
               let x, env = env#pop in
-              env, [Binop ("cmp", L 0, x); CJmp  (s, l)]
+              env#set_stack l, [Binop ("cmp", L 0, x); CJmp  (s, l)]
                      
           | BEGIN (f, a, l) ->
              let env = env#enter f a l in
@@ -254,6 +258,33 @@ let compile env code =
              else env, [Jmp env#epilogue]
              
           | CALL (f, n, p) -> call env f n p
+
+          | DROP ->
+            let x, env = env#pop in
+            (env, [])
+          | DUP -> 
+            let x = env#peek in
+            let s, env = env#allocate in
+            (env, [Mov(x, eax); Mov(eax, s)])
+          | SWAP -> 
+            let x, xs = env#peek2 in
+            (env, [Mov(x, eax); Mov(xs, edx); Mov(eax, xs); Mov(edx, x)])
+          | TAG(t) -> 
+            let s, env = env#allocate in
+            let env, code = call env ".tag" 2 false in
+            (env, [Mov(L(env#hash t), s)] @ code)
+          | ENTER(vars) -> List.fold_left 
+                          (fun (env, code) var -> 
+                              let s, env = env#pop in
+                              (env, code @ [Mov(s, eax); Mov(eax, env#loc var)])
+                          )
+                          (env#scope (List.rev vars), [])
+                          vars
+          | LEAVE -> env#unscope, []
+          | SEXP(t, n) -> 
+            let s, env = env#allocate in
+            let env, code = call env ".sexp" (n + 1) false in
+            (env, [Mov(L(env#hash t), s)] @ code)
 
           | _ -> failwith "X86: unknown stack machine command"
         in
