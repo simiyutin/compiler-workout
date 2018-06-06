@@ -92,6 +92,9 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
         | BINOP(op)     -> eval env (handleBinOp op conf) tl
         | CONST(i)      -> eval env (handleConst (Language.Value.of_int i) conf) tl
         | STRING(x)     -> eval env (handleConst (Language.Value.of_string x) conf) tl
+        | SEXP(t, n)    ->
+          let vs, stack = split n stack in
+          eval env (cstack, (Value.sexp t (List.rev vs))::stack, c) tl
         | LD(x)         -> eval env (handleLoad x conf) tl
         | ST(x)         -> eval env (handleStore x conf) tl
         | LABEL(x)      -> eval env conf tl
@@ -109,6 +112,20 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
                             | []           -> conf
                            )
         | BEGIN(_, argnames, locnames) -> eval env (handleBegin argnames locnames conf) tl
+        | DROP -> eval env (cstack, List.tl stack, c) tl
+        | DUP -> eval env (cstack, List.hd stack :: stack, c) tl
+        | SWAP -> 
+          let x::xs::xss = stack in
+          eval env (cstack, xs::x::xss, c) tl
+        | TAG (t) ->
+          let x::xs = stack in
+          let v = Value.of_int (match x with Value.Sexp(t', _) when t = t' -> 1 | _ -> 0) in
+          eval env (cstack, v::xs, c) tl
+        | ENTER(vars) -> 
+          let vs, stack = split (List.length vars) stack in
+          let st' = List.fold_left (fun st (x, v) -> State.bind x v st) State.undefined (List.combine vars vs) in
+          eval env (cstack, stack, (State.push st st' vars, i, o)) tl
+        | LEAVE -> eval env (cstack, stack, (State.drop st, i, o)) tl
         | _ -> failwith "SM: eval: unknown token"
 
   )
@@ -120,7 +137,7 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
    Takes a program, an input stream, and returns an output stream this program calculates
 *)
 let run p i =
-  (* print_prg p; *)
+  (*print_prg p;*)
   let module M = Map.Make (String) in
   let rec make_map m = function
   | []              -> m
@@ -161,13 +178,30 @@ let compile (defs, p) =
   let rec call f args p =
     let args_code = List.concat @@ List.map expr args in
     args_code @ [CALL (label f, List.length args, p)]
-  and pattern lfalse _ = failwith "Not implemented"
-  and bindings p = failwith "Not implemented"
+  and pattern lfalse p = match p with 
+       | Stmt.Pattern.Wildcard -> false, [DROP]
+       | Stmt.Pattern.Ident(x) -> false, [DROP]
+       | Stmt.Pattern.Sexp(t, patterns) -> 
+         let code = [DUP; TAG t; CJMP("e", lfalse)] @ 
+                    (List.concat @@ List.mapi (fun i ptr -> 
+                     let _, code = pattern lfalse ptr in 
+                     [DUP; CONST(i); CALL(".elem", 2, false)] @ code
+                    ) patterns) in
+         (false, code)
+  and bindings p = match p with
+       | Stmt.Pattern.Wildcard -> [DROP]
+       | Stmt.Pattern.Ident(x) -> [SWAP]
+       | Stmt.Pattern.Sexp(t, patterns) ->
+                    (List.concat @@ List.mapi (fun i ptr -> 
+                     let code = bindings ptr in
+                     [DUP; CONST(i); CALL(".elem", 2, false)] @ code
+                    ) patterns)
   and expr e = match e with
          Language.Expr.Const(z)           -> [CONST z]
        | Language.Expr.Var(x)             -> [LD x]
        | Language.Expr.String(x)          -> [STRING x]
        | Language.Expr.Array(xs)          -> call ".array" xs false
+       | Language.Expr.Sexp(t, xs)        -> (List.concat @@ List.map expr xs) @ [SEXP(t, List.length xs)]
        | Language.Expr.Elem(a, i)         -> call ".elem" [a; i] false
        | Language.Expr.Length(e)          -> call ".length" [e] false
        | Language.Expr.Binop(str, e1, e2) -> (expr e1)@(expr e2)@[BINOP str]
@@ -175,7 +209,8 @@ let compile (defs, p) =
        | _ -> failwith "SM: expr: unknown expr"
 
  in
-  (* returns (env, flag (???), code) *)
+  (* gets: endLabel (ignored), env, stmt *)
+  (* returns: (env, endLabel used flag (ignored), code) *)
   let rec compile_stmt l env stmt = match stmt with
     | Language.Stmt.Assign(x, idxs, e)  -> (match idxs with
       | [] -> (env, false, expr e @ [ST x])
@@ -213,6 +248,19 @@ let compile (defs, p) =
     | Language.Stmt.Call(fname, args) -> (env, false, call fname (args) true)
 
     | Language.Stmt.Return(eOpt) -> (env, false, (match eOpt with | None -> [RET false] | Some e -> expr e @ [RET true]))
+
+    | Language.Stmt.Case(e, patterns) -> 
+      let endLabel, env = env#get_label "caseend" in
+      let code, env = List.fold_left (fun (code, env) (p, s) -> 
+        let lfalse, env = env#get_label "casefalse" in
+        let _, pcode = pattern lfalse p in
+        let env, _, scode = compile_stmt l env (Stmt.Seq(s, Stmt.Leave)) in
+        let bcode = pcode @ bindings p @ [DROP; ENTER(Stmt.Pattern.vars p)] @ scode @ [JMP(endLabel); LABEL(lfalse)] in
+        (bcode::code, env)
+      ) ([], env) patterns in
+      (env, false, expr e @ (List.concat @@ List.rev code) @ [LABEL(endLabel)])
+
+    | Language.Stmt.Leave -> (env, false, [LEAVE])
 
     | _ -> failwith "SM: compile_stmt: unknown statement"
 
