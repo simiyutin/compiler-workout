@@ -251,6 +251,8 @@ let compile env code =
              else env, [Jmp env#epilogue]
              
           | CALL (f, n, p) -> call env f n p
+
+          | _ -> failwith "X86: unknown stack machine command"
         in
         let env'', code'' = compile' env' scode' in
 	env'', code' @ code''

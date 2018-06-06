@@ -137,7 +137,7 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
    Takes a program, an input stream, and returns an output stream this program calculates
 *)
 let run p i =
-  (*print_prg p;*)
+  (* print_prg p; *)
   let module M = Map.Make (String) in
   let rec make_map m = function
   | []              -> m
@@ -174,7 +174,7 @@ let run p i =
 
 
 let compile (defs, p) = 
-  let label s = "L" ^ s in
+  let label s = match s.[0] with '.' -> s | _ -> "L" ^ s in
   let rec call f args p =
     let args_code = List.concat @@ List.map expr args in
     args_code @ [CALL (label f, List.length args, p)]
