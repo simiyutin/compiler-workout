@@ -23,7 +23,11 @@ open Language
 (* checks the tag of S-expression  *) | TAG     of string
 (* enters a scope                  *) | ENTER   of string list
 (* leaves a scope                  *) | LEAVE
+| FAIL
+| STACKSIZE of string
 with show
+
+let verbose = false
                                                    
 (* The type for the stack machine program *)
 type prg = insn list
@@ -97,8 +101,10 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
           eval env (cstack, (Value.sexp t (List.rev vs))::stack, c) tl
         | LD(x)         -> eval env (handleLoad x conf) tl
         | ST(x)         -> eval env (handleStore x conf) tl
-        | LABEL(x)      -> eval env conf tl
-        | JMP(x)        -> eval env conf @@ env#labeled x
+        | LABEL(x)      -> 
+          let () = if verbose then (Printf.printf "label: entering label = %s\n" x) else () in
+          eval env conf tl
+        | JMP(x)        -> let () = if verbose then Printf.printf "jmp: jumping to = %s\n" (x) in eval env conf @@ env#labeled x
         | CJMP(s, x)    -> if condition s conf then eval env (pop1 conf) @@ env#labeled x else eval env (pop1 conf) tl
         | STA(x, n)     -> let v::idxs, stackxs = split (n + 1) stack in eval env (cstack, stackxs, (Language.Stmt.update st x v (List.rev idxs), i, o)) tl
         | CALL(f, nargs, isProcedure) -> (
@@ -112,7 +118,9 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
                             | []           -> conf
                            )
         | BEGIN(_, argnames, locnames) -> eval env (handleBegin argnames locnames conf) tl
-        | DROP -> eval env (cstack, List.tl stack, c) tl
+        | DROP -> 
+          let () = if verbose then Printf.printf "drop: stack size = %d\n" (List.length stack) else () in
+          eval env (cstack, List.tl stack, c) tl
         | DUP -> eval env (cstack, List.hd stack :: stack, c) tl
         | SWAP -> 
           let x::xs::xss = stack in
@@ -122,13 +130,17 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
           let v = Value.of_int (match x with Value.Sexp(t', _) when t = t' -> 1 | _ -> 0) in
           eval env (cstack, v::xs, c) tl
         | ENTER(vars) -> 
+          let () = if verbose then Printf.printf "enter: entering scope of %d vars\n" (List.length vars) else () in
           let vs, stack = split (List.length vars) stack in
           let st' = List.fold_left (fun st (x, v) -> State.bind x v st) State.undefined (List.combine vars vs) in
           eval env (cstack, stack, (State.push st st' vars, i, o)) tl
         | LEAVE -> eval env (cstack, stack, (State.drop st, i, o)) tl
+        | STACKSIZE(x) -> let () = if verbose then Printf.printf "STACKSIZE at %s: stack size = %d\n" x (List.length stack) else () in
+          eval env conf tl
         | _ -> failwith "SM: eval: unknown token"
 
   )
+
 
 (* Top-level evaluation
 
@@ -137,7 +149,7 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
    Takes a program, an input stream, and returns an output stream this program calculates
 *)
 let run p i =
-  (* print_prg p; *)
+  if verbose then print_prg p else ();
   let module M = Map.Make (String) in
   let rec make_map m = function
   | []              -> m
@@ -172,9 +184,21 @@ let run p i =
    stack machine
 *)
 
+let label s = match s.[0] with '.' -> s | _ -> "L" ^ s
+
+let freshname : string -> string =
+  let module M = Map.Make (String) in
+  let counters = ref M.empty in
+  fun prefix ->
+    if not (M.mem prefix !counters) then
+      counters := M.add prefix 0 !counters;
+    let n = M.find prefix !counters in
+    counters := M.add prefix (n + 1) !counters;
+    label @@ Printf.sprintf "%s_%d" prefix n
+
 
 let compile (defs, p) = 
-  let label s = match s.[0] with '.' -> s | _ -> "L" ^ s in
+  
   let rec call f args p =
     let args_code = List.concat @@ List.map expr args in
     args_code @ [CALL (label f, List.length args, p)]
@@ -207,22 +231,22 @@ let compile (defs, p) =
     | Language.Stmt.Skip          -> (env, false, [])
 
     | Language.Stmt.If(e, b1, b2) ->
-      let endlabel, env = env#get_label "endif" in
-      let elselabel, env = env#get_label "else"  in
+      let endlabel = freshname "endif" in
+      let elselabel = freshname "else"  in
       let env, _, thenCode = compile_stmt l env b1 in
       let env, _, elseCode = compile_stmt l env b2 in
       let code = expr e@[CJMP("e", elselabel)]@thenCode@[JMP(endlabel); LABEL(elselabel)]@elseCode@[LABEL(endlabel)] in
       (env, false, code)
 
     | Language.Stmt.While(e, st)  ->
-      let beginlabel, env = env#get_label "whilebegin" in
-      let endlabel, env   = env#get_label "whileend" in
+      let beginlabel = freshname "whilebegin" in
+      let endlabel = freshname "whileend" in
       let env, _, whileBodyCode = compile_stmt l env st in
       let code = [LABEL(beginlabel)]@expr e@[CJMP("e", endlabel)]@ whileBodyCode @[JMP(beginlabel); LABEL(endlabel)] in
       (env, false, code)
 
     | Language.Stmt.Repeat(st, e) ->
-      let beginLabel, env = env#get_label "begin" in
+      let beginLabel = freshname "begin" in
       let env, _, repeatBodyCode = compile_stmt l env st in
       let code = [LABEL(beginLabel)]@ repeatBodyCode @expr e@[CJMP("e", beginLabel)] in
       (env, false, code)
@@ -232,16 +256,22 @@ let compile (defs, p) =
     | Language.Stmt.Return(eOpt) -> (env, false, (match eOpt with | None -> [RET false] | Some e -> expr e @ [RET true]))
 
     | Language.Stmt.Case(e, patterns) ->
+      (* инвариант: съедает одно значение на стеке *)
       let rec pattern lfalse p = match p with 
-       | Stmt.Pattern.Wildcard -> false, []
-       | Stmt.Pattern.Ident(x) -> false, []
-       | Stmt.Pattern.Sexp(t, patterns) -> 
-         let code = [DUP; TAG t; CJMP("e", lfalse)] @ 
-                    (List.concat @@ List.mapi (fun i ptr -> 
-                     let _, pcode = pattern lfalse ptr in 
-                     [DUP; CONST(i); CALL(".elem", 2, false)] @ pcode @ [DROP]
-                    ) patterns) in
+       | Stmt.Pattern.Wildcard -> false, [DROP]
+       | Stmt.Pattern.Ident(x) -> false, [DROP]
+       | Stmt.Pattern.Sexp(t, subpatterns) ->
+         let lDestructor = freshname "casedestructor" in
+         let lGood = freshname "casegood" in
+         let code = [DUP; TAG t; CJMP("e", lDestructor); JMP(lGood); LABEL(lDestructor); DROP; JMP(lfalse); LABEL(lGood)]
+                    @ (List.concat @@ List.mapi (fun i ptr -> 
+                     let _, pcode = pattern lDestructor ptr in (* так как pcode не всегда возвращается, а может перейти на lfalse, то надо обеспечить, чтобы следующий DROP вызывался *)
+                     [DUP; CONST(i); CALL(".elem", 2, false)] @ pcode
+                    ) subpatterns) @ [DROP]
+                    
+         in
          (false, code)
+
       and bindings p = match p with
        | Stmt.Pattern.Wildcard -> [DROP]
        | Stmt.Pattern.Ident(x) -> [SWAP]
@@ -250,18 +280,19 @@ let compile (defs, p) =
                      let code = bindings ptr in
                      [DUP; CONST(i); CALL(".elem", 2, false)] @ code
                     ) patterns) @ [DROP]
+
       in
-      let endLabel, env = env#get_label "caseend" in
+      let endLabel = freshname "caseend" in
       let exprCode = expr e in
       let branchCode, env = List.fold_left (fun (code, env) (p, s) -> 
-        let lfalse, env = env#get_label "casefalse" in
+        let lfalse = freshname "casefalse" in
         let _, pcode = pattern lfalse p in
         let bcode = bindings p in
         let env, _, scode = compile_stmt l env (Stmt.Seq(s, Stmt.Leave)) in
-        let branchCode = pcode @ bcode @ [ENTER(Stmt.Pattern.vars p)] @ scode @ [JMP(endLabel); LABEL(lfalse)] in
+        let branchCode = [STACKSIZE("branch_before"); DUP] @ pcode @ bcode @ [ENTER(Stmt.Pattern.vars p)] @ scode @ [STACKSIZE("branch_after"); JMP(endLabel); LABEL(lfalse); STACKSIZE("branch_after")] in
         (branchCode::code, env)
       ) ([], env) patterns in
-      (env, false, exprCode @ (List.concat @@ List.rev branchCode) @ [LABEL(endLabel)])
+      (env, false, [STACKSIZE("case_start")] @ exprCode @ (List.concat @@ List.rev branchCode) @ [LABEL(endLabel)])
 
     | Language.Stmt.Leave -> (env, false, [LEAVE])
 
@@ -270,7 +301,7 @@ let compile (defs, p) =
 
  in
   let compile_def env (name, (args, locals, stmt)) =
-    let lend, env       = env#get_label ("_end_" ^ name) in
+    let lend       = freshname ("_end_" ^ name) in
     let env, flag, code = compile_stmt lend env stmt in
     env,
     [LABEL name; BEGIN (name, args, locals)] @
@@ -290,7 +321,7 @@ let compile (defs, p) =
       (env, [])
       defs
   in
-  let lend, env = env#get_label "end" in
+  let lend = freshname "end" in
   let _, flag, code = compile_stmt lend env p in
   (if flag then code @ [LABEL lend] else code) @ [END] @ (List.concat def_code) 
 
