@@ -273,18 +273,13 @@ let compile env code =
             let s, env = env#allocate in
             let env, code = call env ".tag" 2 false in
             (env, [Mov(L(env#hash t), s)] @ code)
-          | ENTER(vars) -> List.fold_left 
-                          (fun (env, code) var -> 
-                              let s, env = env#pop in
-                              (env, code @ [Mov(s, eax); Mov(eax, env#loc var)])
-                          )
-                          (env#scope (List.rev vars), [])
-                          vars
+          | ENTER(vars) -> (env#scope (List.rev vars), [])
           | LEAVE -> env#unscope, []
           | SEXP(t, n) -> 
             let s, env = env#allocate in
             let env, code = call env ".sexp" (n + 1) false in
             (env, [Mov(L(env#hash t), s)] @ code)
+          | FAIL | STACKSIZE(_) | LOG(_) -> (env, [])
 
           | _ -> failwith "X86: unknown stack machine command"
         in
