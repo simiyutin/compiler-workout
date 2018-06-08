@@ -25,6 +25,7 @@ open Language
 (* leaves a scope                  *) | LEAVE
 | FAIL
 | STACKSIZE of string
+| LOG of string
 with show
 
 let verbose = false
@@ -131,11 +132,11 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = match prg wi
           eval env (cstack, v::xs, c) tl
         | ENTER(vars) -> 
           let () = if verbose then Printf.printf "enter: entering scope of %d vars\n" (List.length vars) else () in
-          let vs, stack = split (List.length vars) stack in
-          let st' = List.fold_left (fun st (x, v) -> State.bind x v st) State.undefined (List.combine vars vs) in
-          eval env (cstack, stack, (State.push st st' vars, i, o)) tl
+          eval env (cstack, stack, (State.push st State.undefined vars, i, o)) tl
         | LEAVE -> eval env (cstack, stack, (State.drop st, i, o)) tl
         | STACKSIZE(x) -> let () = if verbose then Printf.printf "STACKSIZE at %s: stack size = %d\n" x (List.length stack) else () in
+          eval env conf tl
+        | LOG(x) -> let () = if verbose then Printf.printf "LOG %s\n" x else () in
           eval env conf tl
         | _ -> failwith "SM: eval: unknown token"
 
@@ -263,7 +264,7 @@ let compile (defs, p) =
        | Stmt.Pattern.Sexp(t, subpatterns) ->
          let lDestructor = freshname "casedestructor" in
          let lGood = freshname "casegood" in
-         let code = [DUP; TAG t; CJMP("e", lDestructor); JMP(lGood); LABEL(lDestructor); DROP; JMP(lfalse); LABEL(lGood)]
+         let code = [DUP; TAG t; CJMP("e", lDestructor); JMP(lGood); LABEL(lDestructor); LOG("pattern failed"); DROP; JMP(lfalse); LABEL(lGood)]
                     @ (List.concat @@ List.mapi (fun i ptr -> 
                      let _, pcode = pattern lDestructor ptr in (* так как pcode не всегда возвращается, а может перейти на lfalse, то надо обеспечить, чтобы следующий DROP вызывался *)
                      [DUP; CONST(i); CALL(".elem", 2, false)] @ pcode
@@ -274,11 +275,11 @@ let compile (defs, p) =
 
       and bindings p = match p with
        | Stmt.Pattern.Wildcard -> [DROP]
-       | Stmt.Pattern.Ident(x) -> [SWAP]
+       | Stmt.Pattern.Ident(x) -> [ST x]
        | Stmt.Pattern.Sexp(t, patterns) ->
                     (List.concat @@ List.mapi (fun i ptr -> 
                      let code = bindings ptr in
-                     [DUP; CONST(i); CALL(".elem", 2, false)] @ code
+                     [DUP; CONST(i); LOG("call elem in binding"); CALL(".elem", 2, false)] @ code
                     ) patterns) @ [DROP]
 
       in
@@ -289,7 +290,7 @@ let compile (defs, p) =
         let _, pcode = pattern lfalse p in
         let bcode = bindings p in
         let env, _, scode = compile_stmt l env (Stmt.Seq(s, Stmt.Leave)) in
-        let branchCode = [STACKSIZE("branch_before"); DUP] @ pcode @ bcode @ [ENTER(Stmt.Pattern.vars p)] @ scode @ [STACKSIZE("branch_after"); JMP(endLabel); LABEL(lfalse); STACKSIZE("branch_after")] in
+        let branchCode = [STACKSIZE("branch_before"); DUP] @ pcode @ [ENTER(Stmt.Pattern.vars p)] @ [LOG("bcode"); STACKSIZE("bcode")] @ bcode @ [LOG("executing case branch")] @ scode @ [STACKSIZE("branch_after"); JMP(endLabel); LABEL(lfalse); STACKSIZE("branch_after")] in
         (branchCode::code, env)
       ) ([], env) patterns in
       (env, false, [STACKSIZE("case_start")] @ exprCode @ (List.concat @@ List.rev branchCode) @ [LABEL(endLabel)])
